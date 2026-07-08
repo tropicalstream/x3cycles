@@ -98,9 +98,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 val p = player ?: return
                 if (!p.alive) return
                 val base = if (p.pendingDir >= 0) p.pendingDir else p.dir
-                // Reversed vs. grid CCW/CW so left-input curves the cycle to the
-                // viewer's left under the isometric camera.
-                p.pendingDir = if (left) rightOf(base) else leftOf(base)
+                p.pendingDir = if (left) leftOf(base) else rightOf(base)
                 host.sfx(Sfx.TURN, if (left) 1f else 1.18f, 0.7f)
             }
             else -> {}
