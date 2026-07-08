@@ -24,6 +24,9 @@ assets.
 - Each cycle lays a solid light wall behind it. Hitting **any** wall (yours, a
   rival's, or the arena border) **derezzes** you.
 - **Clear a level by being the last cycle riding** — outlast every rival.
+- When a rival derezzes, **only its own light wall powers down** — dissolving in
+  a shower of sparks and freeing up the grid it once blocked. Every other wall
+  stays solid.
 - **Level 1 has one rival; each level adds one, up to five**, and every level is
   a touch faster than the last.
 - After level 5 the rival count **wraps back to one** — but now **Recognizer

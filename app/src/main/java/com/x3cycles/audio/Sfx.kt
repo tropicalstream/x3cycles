@@ -36,8 +36,9 @@ class Sfx(private val context: Context) {
         const val ZAP = 14
         const val JUMP = 15       // auto-hop over an enemy beam
         const val EXTRA = 16      // bonus life ("1-UP")
-        const val DRONE = 17
-        private const val COUNT = 18
+        const val BEAMOUT = 17    // a downed rival's light wall powering off
+        const val DRONE = 18
+        private const val COUNT = 19
         private const val RATE = 22050
     }
 
@@ -77,6 +78,7 @@ class Sfx(private val context: Context) {
                 ids[ZAP] = load(dir, "zap", synthZap())
                 ids[JUMP] = load(dir, "jump", synthJump())
                 ids[EXTRA] = load(dir, "extra", arpeggio(intArrayOf(784, 1046, 1318, 1568, 2093), 68, 0.7f))
+                ids[BEAMOUT] = load(dir, "beamout", synthBeamOut())
                 ids[DRONE] = load(dir, "drone", synthDrone())
                 loaded = true
             }
@@ -129,6 +131,12 @@ class Sfx(private val context: Context) {
     private fun synthBlip() = buf(45) { t -> sine(1000f, t) * exp(-t * 45f) * 0.5f }
     private fun synthPower() = buf(320) { t -> sine(280f + 900f * t, t) * exp(-t * 5f) * 0.5f }
     private fun synthZap() = buf(160) { t -> (saw(1500f + 300f * sine(80f, t), t) + 0.4f * noise()) * exp(-t * 12f) * 0.5f }
+    /** A crumbling downward power-off sweep for a rival's light wall derezzing. */
+    private fun synthBeamOut() = buf(520) { t ->
+        val f = 620f - 520f * (t / 0.5f).coerceAtMost(1f)
+        val crush = if ((t * 60f).toInt() % 2 == 0) 1f else 0.5f
+        ((sq(f, t) * 0.4f + noise() * 0.4f) * crush) * exp(-t * 3.4f)
+    }
     /** A springy upward whoosh for the auto-hop over an enemy beam. */
     private fun synthJump() = buf(300) { t ->
         val sweep = 260f + 1500f * (t / 0.3f).coerceAtMost(1f)

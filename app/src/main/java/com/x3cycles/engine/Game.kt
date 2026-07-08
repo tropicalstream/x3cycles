@@ -26,6 +26,7 @@ class Cycle(var cx: Int, var cz: Int, var dir: Int, val hue: Float, val isPlayer
     var progress = 0f
     var alive = true
     var pendingDir = -1
+    var derezT = 0f              // >0 while this cycle's beam dissolves away
     val trail = ArrayList<IntArray>().apply { add(intArrayOf(cx, cz)) }
     fun headX() = cx + DX[dir] * progress
     fun headZ() = cz + DZ[dir] * progress
@@ -64,6 +65,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         const val START_LIVES = 3
         const val MAX_LIVES = 5
         const val EXTRA_LIFE_STEP = 5000
+        const val BEAM_DEREZ_DUR = 0.7f   // how long a downed rival's wall dissolves
     }
 
     var state = GameState.TITLE; private set
@@ -131,6 +133,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         shake = maxOf(0f, shake - dt * 3f)
         jumpAnim = maxOf(0f, jumpAnim - dt * 2.5f)
         updateParticles(dt)
+        updateDerez(dt)
         when (state) {
             GameState.TITLE -> {}
             GameState.COUNTDOWN -> {
@@ -279,7 +282,83 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         shake = maxOf(shake, 10f)
         explode(c.headX(), c.headZ(), c.hue)
         host.sfx(Sfx.DEREZ, if (c.isPlayer) 0.8f else 1.1f)
-        if (!c.isPlayer) { addScore(100 * level); host.sfx(Sfx.KILL, 1f, 0.9f) }
+        if (!c.isPlayer) {
+            addScore(100 * level); host.sfx(Sfx.KILL, 1f, 0.9f)
+            beamDerez(c) // only THIS rival's light wall powers down
+        }
+    }
+
+    /** Dissolve one rival's beam: free its cells, spray it, and start the fade. */
+    private fun beamDerez(c: Cycle) {
+        c.derezT = BEAM_DEREZ_DUR
+        clearTrailCells(c)
+        sprayBeam(c)
+        host.sfx(Sfx.BEAMOUT)
+    }
+
+    /** Zero out exactly the cells this cycle owned, so its wall stops blocking. */
+    private fun clearTrailCells(c: Cycle) {
+        val pts = c.trail
+        for (i in 1 until pts.size) clearLineCells(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+        if (pts.isNotEmpty()) clearLineCells(pts.last()[0], pts.last()[1], c.cx, c.cz)
+        else if (c.cz in 0 until GRID && c.cx in 0 until GRID) grid[c.cz * GRID + c.cx] = 0
+    }
+
+    private fun clearLineCells(x0: Int, z0: Int, x1: Int, z1: Int) {
+        val sx = sgn(x1 - x0); val sz = sgn(z1 - z0)
+        var x = x0; var z = z0
+        while (true) {
+            // Guard on R_TRAIL so we never erase the player's beam or the border.
+            if (x in 0 until GRID && z in 0 until GRID && grid[z * GRID + x] == R_TRAIL) grid[z * GRID + x] = 0
+            if (x == x1 && z == z1) break
+            x += sx; z += sz
+        }
+    }
+
+    private fun sgn(v: Int) = if (v > 0) 1 else if (v < 0) -1 else 0
+
+    /** A burst of sparks along the whole length of a derezzing wall. */
+    private fun sprayBeam(c: Cycle) {
+        val pts = ArrayList(c.trail).apply { add(intArrayOf(c.cx, c.cz)) }
+        var budget = 90
+        for (i in 1 until pts.size) {
+            val sx = sgn(pts[i][0] - pts[i - 1][0]); val sz = sgn(pts[i][1] - pts[i - 1][1])
+            var x = pts[i - 1][0]; var z = pts[i - 1][1]
+            while (budget > 0) {
+                spawnBeamSpark(x + 0.5f, z + 0.5f, c.hue); budget--
+                if (x == pts[i][0] && z == pts[i][1]) break
+                x += sx; z += sz
+            }
+        }
+    }
+
+    private fun spawnBeamSpark(x: Float, z: Float, hue: Float) {
+        val p = pool.removeFirstOrNull() ?: Particle()
+        p.x = x + (rng.nextFloat() - 0.5f) * 0.4f
+        p.y = rng.nextFloat() * WALL_H
+        p.z = z + (rng.nextFloat() - 0.5f) * 0.4f
+        val a = rng.nextFloat() * 6.2832f; val sp = 0.5f + rng.nextFloat() * 2.5f
+        p.vx = cos(a) * sp; p.vz = sin(a) * sp; p.vy = 1.5f + rng.nextFloat() * 4f
+        p.life = 0.5f + rng.nextFloat() * 0.7f; p.maxLife = p.life
+        p.hue = (hue + rng.nextFloat() * 0.15f) % 1f
+        particles.add(p)
+    }
+
+    /** Tick down each dissolving beam, trickle sparks, then drop the dead cycle. */
+    private fun updateDerez(dt: Float) {
+        var i = cycles.size - 1
+        while (i >= 0) {
+            val c = cycles[i]
+            if (c.derezT > 0f) {
+                c.derezT -= dt
+                if (rng.nextFloat() < 0.6f && c.trail.isNotEmpty()) {
+                    val seg = c.trail[rng.nextInt(c.trail.size)]
+                    spawnBeamSpark(seg[0] + 0.5f, seg[1] + 0.5f, c.hue)
+                }
+                if (c.derezT <= 0f) { c.derezT = 0f; cycles.removeAt(i) }
+            }
+            i--
+        }
     }
 
     // --------------------------------------------------- recognizers & bolts

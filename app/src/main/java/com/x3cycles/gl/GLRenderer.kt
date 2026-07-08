@@ -111,7 +111,7 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         buildGrid(h)
         buildBorder(h)
         if (game.powerActive) buildPowerUp(game.powerX.toFloat(), game.powerZ.toFloat())
-        for (c in game.cycles) buildTrail(c)
+        for (c in game.cycles) if (c.derezT > 0f) buildDerezTrail(c) else buildTrail(c)
         for (c in game.cycles) if (c.alive) buildCycleHead(c)
         buildJumpCharge()
         for (r in game.recognizers) buildRecognizer(r.x, r.z)
@@ -172,6 +172,31 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
             val hx = c.headX() + 0.5f; val hz = c.headZ() + 0.5f
             lines.line(lx, 0.02f, lz, hx, 0.02f, hz, r, g, b, 0.6f)
             lines.line(lx, WH, lz, hx, WH, hz, r, g, b, 0.95f)
+        }
+    }
+
+    /** A downed rival's wall: sinking into the floor, flickering and whitening. */
+    private fun buildDerezTrail(c: com.x3cycles.engine.Cycle) {
+        val frac = (c.derezT / Game.BEAM_DEREZ_DUR).coerceIn(0f, 1f)
+        val flick = 0.45f + 0.55f * sin(game.time * 55f + c.hue * 40f)
+        hsv(c.hue, 0.45f * frac, 1f) // desaturate toward white as it dies
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        val topY = WH * frac
+        val pts = c.trail
+        for (i in 0 until pts.size) {
+            val ax = pts[i][0].toFloat() + 0.5f; val az = pts[i][1].toFloat() + 0.5f
+            lines.line(ax, 0f, az, ax, topY, az, r, g, b, frac * flick)
+            if (i > 0) {
+                val bx = pts[i - 1][0].toFloat() + 0.5f; val bz = pts[i - 1][1].toFloat() + 0.5f
+                lines.line(ax, 0.02f, az, bx, 0.02f, bz, r, g, b, frac * 0.6f)
+                lines.line(ax, topY, az, bx, topY, bz, r, g, b, frac * flick)
+            }
+        }
+        if (pts.isNotEmpty()) {
+            val lx = pts.last()[0].toFloat() + 0.5f; val lz = pts.last()[1].toFloat() + 0.5f
+            val hx = c.headX() + 0.5f; val hz = c.headZ() + 0.5f
+            lines.line(lx, 0.02f, lz, hx, 0.02f, hz, r, g, b, frac * 0.6f)
+            lines.line(lx, topY, lz, hx, topY, hz, r, g, b, frac * flick)
         }
     }
 
