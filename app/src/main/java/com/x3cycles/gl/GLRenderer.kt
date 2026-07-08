@@ -13,6 +13,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -109,8 +110,10 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val h = game.time * 0.05f
         buildGrid(h)
         buildBorder(h)
+        if (game.powerActive) buildPowerUp(game.powerX.toFloat(), game.powerZ.toFloat())
         for (c in game.cycles) buildTrail(c)
         for (c in game.cycles) if (c.alive) buildCycleHead(c)
+        buildJumpCharge()
         for (r in game.recognizers) buildRecognizer(r.x, r.z)
         for (b in game.bolts) {
             fx.v(b.x, 0.5f, b.z, 1f, 0.3f, 0.2f, 1f)
@@ -183,6 +186,42 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         fx.v(hx, WH * 0.6f, hz, 1f, 1f, 1f, 1f)
     }
 
+    /** The level's jump pickup: a bobbing spring-green beacon with an up-chevron. */
+    private fun buildPowerUp(gx: Float, gz: Float) {
+        val x = gx + 0.5f; val z = gz + 0.5f
+        val pulse = 0.55f + 0.45f * sin(game.time * 5f)
+        hsv(0.42f, 0.75f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        // beacon column so it reads from across the grid
+        lines.line(x, 0f, z, x, 1.6f, z, r, g, b, 0.3f * pulse)
+        val y = 0.6f + 0.12f * sin(game.time * 4f)
+        val s = 0.42f
+        val a = game.time * 2.5f
+        val ca = cos(a) * s; val sa = sin(a) * s
+        // spinning cross
+        lines.line(x - ca, y, z - sa, x + ca, y, z + sa, r, g, b, pulse)
+        lines.line(x - sa, y, z + ca, x + sa, y, z - ca, r, g, b, pulse)
+        // up-chevron hinting "jump"
+        lines.line(x - s * 0.6f, y, z, x, y + s * 0.8f, z, r, g, b, pulse)
+        lines.line(x + s * 0.6f, y, z, x, y + s * 0.8f, z, r, g, b, pulse)
+        fx.v(x, y, z, r, g, b, 1f)
+    }
+
+    /** Orbiting sparks around the player's head while a jump is charged. */
+    private fun buildJumpCharge() {
+        if (!game.jumpArmed) return
+        val p = game.player ?: return
+        if (!p.alive) return
+        val hx = p.headX() + 0.5f; val hz = p.headZ() + 0.5f
+        hsv(0.42f, 0.7f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        val rad = 0.55f
+        for (k in 0 until 3) {
+            val a = game.time * 3f + k * 2.094f
+            fx.v(hx + cos(a) * rad, WH * 0.7f, hz + sin(a) * rad, r, g, b, 1f)
+        }
+    }
+
     private fun buildRecognizer(x: Float, z: Float) {
         val r = 1f; val g = 0.35f; val b = 0.15f
         val s = 0.95f; val ht = 1.8f
@@ -229,6 +268,8 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
             GameState.RACING -> {
                 bar()
+                if (game.jumpArmed) text("JUMP READY", 320f, 66f, 1.6f, 0.5f, 1f, 0.7f, pulse)
+                else if (game.powerActive) text("GRAB THE JUMP", 320f, 66f, 1.5f, 0.5f, 1f, 0.7f, pulse * 0.8f)
                 if (game.recognizerCount > 0) text("RECOGNIZERS INBOUND", 320f, 452f, 1.5f, 1f, 0.4f, 0.2f, pulse)
             }
             GameState.LEVEL_CLEAR -> {

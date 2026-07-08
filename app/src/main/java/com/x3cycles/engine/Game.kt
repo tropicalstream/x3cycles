@@ -56,6 +56,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         const val COUNT_SECS = 5f
         const val RECOG_SPEED = 4.6f
         const val BOLT_SPEED = 9f
+        // Grid occupancy owners, so the jump only fires over an enemy beam.
+        const val P_TRAIL = 1
+        const val R_TRAIL = 2
     }
 
     var state = GameState.TITLE; private set
@@ -82,6 +85,14 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var player: Cycle? = null; private set
     val opponentsAlive get() = cycles.count { !it.isPlayer && it.alive }
     var recognizerCount = 0; private set
+
+    // Jump power-up: one collectible per level; once picked up it auto-fires the
+    // first time the player would ride into an enemy beam, hopping clear of it.
+    var powerX = -1; private set
+    var powerZ = -1; private set
+    var powerActive = false; private set   // pickup sitting on the grid
+    var jumpArmed = false; private set      // collected, waiting to auto-fire
+    var jumpAnim = 0f; private set          // >0 briefly after a hop (for FX)
 
     fun boot() {
         highScore = store.highScore
@@ -110,6 +121,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     fun update(dt: Float) {
         time += dt
         shake = maxOf(0f, shake - dt * 3f)
+        jumpAnim = maxOf(0f, jumpAnim - dt * 2.5f)
         updateParticles(dt)
         when (state) {
             GameState.TITLE -> {}
@@ -152,10 +164,34 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             c.progress -= 1f
             if (!c.isPlayer) aiSteer(c) else applyPlayerTurn(c)
             val tx = c.cx + DX[c.dir]; val tz = c.cz + DZ[c.dir]
-            if (blocked(tx, tz)) { derez(c); return }
+            if (blocked(tx, tz)) {
+                // Charged player auto-hops a single enemy beam — never a wall,
+                // border, or their own trail — clearing the once-per-level jump.
+                if (c.isPlayer && jumpArmed && cellVal(tx, tz) == R_TRAIL) {
+                    val lx = tx + DX[c.dir]; val lz = tz + DZ[c.dir]
+                    if (!blocked(lx, lz)) {
+                        jumpArmed = false; jumpAnim = 1f
+                        c.cx = lx; c.cz = lz
+                        grid[lz * GRID + lx] = P_TRAIL // (tx,tz) stays a gap: airborne
+                        jumpPuff(tx + 0.5f, tz + 0.5f, c.hue)
+                        host.sfx(Sfx.JUMP)
+                        continue
+                    }
+                }
+                derez(c); return
+            }
             c.cx = tx; c.cz = tz
-            grid[tz * GRID + tx] = 1
+            grid[tz * GRID + tx] = if (c.isPlayer) P_TRAIL else R_TRAIL
+            if (c.isPlayer && powerActive && tx == powerX && tz == powerZ) {
+                powerActive = false; jumpArmed = true
+                host.sfx(Sfx.POWER, 1.1f, 0.9f)
+            }
         }
+    }
+
+    private fun cellVal(x: Int, z: Int): Int {
+        if (x < 0 || x >= GRID || z < 0 || z >= GRID) return -1
+        return grid[z * GRID + x]
     }
 
     private fun applyPlayerTurn(c: Cycle) {
@@ -278,6 +314,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         for (i in 0 until recognizerCount) {
             recognizers.add(Recognizer(4f + (GRID - 8f) * (i.toFloat() / maxOf(1, recognizerCount)), GRID / 2f))
         }
+        placePowerUp()
+        jumpArmed = false
+        jumpAnim = 0f
 
         countdown = COUNT_SECS
         lastBeep = -1
@@ -287,7 +326,34 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         if (score > highScore) { highScore = score; store.highScore = score }
     }
 
-    private fun occupy(c: Cycle) { grid[c.cz * GRID + c.cx] = 1 }
+    private fun occupy(c: Cycle) { grid[c.cz * GRID + c.cx] = if (c.isPlayer) P_TRAIL else R_TRAIL }
+
+    /** Drop the level's single jump pickup on an empty cell away from the player. */
+    private fun placePowerUp() {
+        powerActive = false; powerX = -1; powerZ = -1
+        val pl = player
+        var tries = 0
+        while (tries++ < 300) {
+            val x = 3 + rng.nextInt(GRID - 6)
+            val z = 3 + rng.nextInt(GRID - 6)
+            if (grid[z * GRID + x] != 0) continue
+            if (pl != null && abs(x - pl.cx) + abs(z - pl.cz) < 6) continue
+            powerX = x; powerZ = z; powerActive = true
+            return
+        }
+    }
+
+    private fun jumpPuff(x: Float, z: Float, hue: Float) {
+        repeat(18) {
+            val p = pool.removeFirstOrNull() ?: Particle()
+            p.x = x; p.y = 0.2f; p.z = z
+            val a = rng.nextFloat() * 6.2832f; val sp = 1f + rng.nextFloat() * 3f
+            p.vx = cos(a) * sp; p.vz = sin(a) * sp; p.vy = 3f + rng.nextFloat() * 3f
+            p.life = 0.5f + rng.nextFloat() * 0.3f; p.maxLife = p.life
+            p.hue = (hue + 0.5f) % 1f
+            particles.add(p)
+        }
+    }
 
     private fun gameOver() {
         state = GameState.GAME_OVER
@@ -300,6 +366,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         state = GameState.TITLE
         cycles.clear(); recognizers.clear(); bolts.clear()
         player = null
+        powerActive = false; jumpArmed = false; jumpAnim = 0f
         host.stopDrone()
     }
 

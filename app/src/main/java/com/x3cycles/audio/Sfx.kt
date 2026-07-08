@@ -32,10 +32,11 @@ class Sfx(private val context: Context) {
         const val HISCORE = 10
         const val WARN = 11
         const val BLIP = 12
-        const val POWER = 13
+        const val POWER = 13      // power-up collected
         const val ZAP = 14
-        const val DRONE = 15
-        private const val COUNT = 16
+        const val JUMP = 15       // auto-hop over an enemy beam
+        const val DRONE = 16
+        private const val COUNT = 17
         private const val RATE = 22050
     }
 
@@ -73,6 +74,7 @@ class Sfx(private val context: Context) {
                 ids[BLIP] = load(dir, "blip", synthBlip())
                 ids[POWER] = load(dir, "power", synthPower())
                 ids[ZAP] = load(dir, "zap", synthZap())
+                ids[JUMP] = load(dir, "jump", synthJump())
                 ids[DRONE] = load(dir, "drone", synthDrone())
                 loaded = true
             }
@@ -125,6 +127,11 @@ class Sfx(private val context: Context) {
     private fun synthBlip() = buf(45) { t -> sine(1000f, t) * exp(-t * 45f) * 0.5f }
     private fun synthPower() = buf(320) { t -> sine(280f + 900f * t, t) * exp(-t * 5f) * 0.5f }
     private fun synthZap() = buf(160) { t -> (saw(1500f + 300f * sine(80f, t), t) + 0.4f * noise()) * exp(-t * 12f) * 0.5f }
+    /** A springy upward whoosh for the auto-hop over an enemy beam. */
+    private fun synthJump() = buf(300) { t ->
+        val sweep = 260f + 1500f * (t / 0.3f).coerceAtMost(1f)
+        (sine(sweep, t) * 0.5f + sq(sweep * 0.5f, t) * 0.2f) * exp(-t * 5.5f)
+    }
 
     /** Loopable engine hum — detuned saws with a slow throb. */
     private fun synthDrone(): ShortArray = buf(2000) { t ->
