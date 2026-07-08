@@ -35,9 +35,9 @@ assets.
   a **bonus life every 5,000 points**, up to a cap of **5** — shown as pips in
   the bottom-left.
 - **Jump power-up.** One pickup is hidden on each level (a bobbing green
-  beacon). Grab it and it **auto-fires once** the next time you'd ride into an
-  **enemy beam**, hopping you clear of it — it won't save you from a wall, the
-  border, or your own trail.
+  beacon). Grab it and it **auto-fires once** the next time you'd ride into a
+  **light beam — enemy or your own** — hopping you clear of it. It won't save
+  you from the arena wall/border.
 
 ## Sound
 

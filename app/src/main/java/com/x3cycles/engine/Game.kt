@@ -197,9 +197,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             if (!c.isPlayer) aiSteer(c) else applyPlayerTurn(c)
             val tx = c.cx + DX[c.dir]; val tz = c.cz + DZ[c.dir]
             if (blocked(tx, tz)) {
-                // Charged player auto-hops a single enemy beam — never a wall,
-                // border, or their own trail — clearing the once-per-level jump.
-                if (c.isPlayer && jumpArmed && cellVal(tx, tz) == R_TRAIL) {
+                // Charged player auto-hops a single light beam — enemy OR their
+                // own — but never the arena wall/border. Once-per-level jump.
+                if (c.isPlayer && jumpArmed && cellVal(tx, tz) > 0) {
                     val lx = tx + DX[c.dir]; val lz = tz + DZ[c.dir]
                     if (!blocked(lx, lz)) {
                         jumpArmed = false; jumpAnim = 1f
