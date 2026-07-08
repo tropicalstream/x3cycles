@@ -8,7 +8,7 @@ import kotlin.math.hypot
 import kotlin.math.sin
 import kotlin.random.Random
 
-enum class GameState { TITLE, COUNTDOWN, RACING, LEVEL_CLEAR, GAME_OVER }
+enum class GameState { TITLE, COUNTDOWN, RACING, LIFE_LOST, LEVEL_CLEAR, GAME_OVER }
 
 interface GameHost {
     fun sfx(id: Int, pitch: Float = 1f, vol: Float = 1f)
@@ -59,6 +59,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         // Grid occupancy owners, so the jump only fires over an enemy beam.
         const val P_TRAIL = 1
         const val R_TRAIL = 2
+        // Lives: start with three, earn a bonus life every milestone up to a cap
+        // (classic arcade practice — generous early, capped to keep the HUD sane).
+        const val START_LIVES = 3
+        const val MAX_LIVES = 5
+        const val EXTRA_LIFE_STEP = 5000
     }
 
     var state = GameState.TITLE; private set
@@ -73,12 +78,15 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var score = 0; private set
     var highScore = 0; private set
     var bestLevel = 1; private set
+    var lives = START_LIVES; private set
+    private var nextLifeScore = EXTRA_LIFE_STEP
     var speed = BASE_SPEED; private set
     var countdown = 0f; private set
     val countInt get() = (countdown - 0.0001f).toInt() + 1   // 5..1, 0 = GO
     var time = 0f; private set
     var shake = 0f; private set
     private var clearTimer = 0f
+    private var lifeLostTimer = 0f
     private var lastBeep = -1
     private val rng = Random(System.nanoTime())
 
@@ -136,6 +144,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 if (countdown <= 0f) { state = GameState.RACING; host.startDrone() }
             }
             GameState.RACING -> updateRacing(dt)
+            GameState.LIFE_LOST -> { lifeLostTimer -= dt; if (lifeLostTimer <= 0f) startLevel(level) }
             GameState.LEVEL_CLEAR -> { clearTimer -= dt; if (clearTimer <= 0f) startLevel(level + 1) }
             GameState.GAME_OVER -> {}
         }
@@ -147,14 +156,37 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         updateBolts(dt)
 
         val p = player
-        if (p != null && !p.alive) { gameOver(); return }
+        if (p != null && !p.alive) { loseLife(); return }
         if (opponentsAlive == 0) {
-            score += 500 * level
+            addScore(500 * level)
             state = GameState.LEVEL_CLEAR
             clearTimer = 2.2f
             host.stopDrone()
             host.sfx(Sfx.LEVELUP)
         }
+    }
+
+    /** Player derezzed: spend a life and restart the level, or end the run. */
+    private fun loseLife() {
+        lives--
+        host.stopDrone()
+        if (lives <= 0) {
+            gameOver()
+        } else {
+            state = GameState.LIFE_LOST
+            lifeLostTimer = 1.9f
+            host.sfx(Sfx.WARN, 0.7f, 0.8f)
+        }
+    }
+
+    /** All scoring flows through here so bonus lives are awarded consistently. */
+    private fun addScore(n: Int) {
+        score += n
+        while (score >= nextLifeScore) {
+            nextLifeScore += EXTRA_LIFE_STEP
+            if (lives < MAX_LIVES) { lives++; host.sfx(Sfx.EXTRA) }
+        }
+        if (score > highScore) { highScore = score; store.highScore = score }
     }
 
     private fun stepCycle(c: Cycle, dt: Float) {
@@ -247,7 +279,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         shake = maxOf(shake, 10f)
         explode(c.headX(), c.headZ(), c.hue)
         host.sfx(Sfx.DEREZ, if (c.isPlayer) 0.8f else 1.1f)
-        if (!c.isPlayer) { score += 100 * level; host.sfx(Sfx.KILL, 1f, 0.9f) }
+        if (!c.isPlayer) { addScore(100 * level); host.sfx(Sfx.KILL, 1f, 0.9f) }
     }
 
     // --------------------------------------------------- recognizers & bolts
@@ -289,6 +321,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
 
     fun startGame() {
         score = 0
+        lives = START_LIVES
+        nextLifeScore = EXTRA_LIFE_STEP
         startLevel(1)
     }
 

@@ -35,8 +35,9 @@ class Sfx(private val context: Context) {
         const val POWER = 13      // power-up collected
         const val ZAP = 14
         const val JUMP = 15       // auto-hop over an enemy beam
-        const val DRONE = 16
-        private const val COUNT = 17
+        const val EXTRA = 16      // bonus life ("1-UP")
+        const val DRONE = 17
+        private const val COUNT = 18
         private const val RATE = 22050
     }
 
@@ -75,6 +76,7 @@ class Sfx(private val context: Context) {
                 ids[POWER] = load(dir, "power", synthPower())
                 ids[ZAP] = load(dir, "zap", synthZap())
                 ids[JUMP] = load(dir, "jump", synthJump())
+                ids[EXTRA] = load(dir, "extra", arpeggio(intArrayOf(784, 1046, 1318, 1568, 2093), 68, 0.7f))
                 ids[DRONE] = load(dir, "drone", synthDrone())
                 loaded = true
             }

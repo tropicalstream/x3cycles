@@ -30,12 +30,21 @@ assets.
   tanks** join the grid: AI hunters that chase the player and fire. (Another
   tank is added on each further wrap.)
 - A **5-second countdown** (with beeps) opens every level.
+- **Lives.** You start with **3**. A derez spends a life and **restarts the
+  current level** (your score carries over); running out ends the run. You earn
+  a **bonus life every 5,000 points**, up to a cap of **5** — shown as pips in
+  the bottom-left.
+- **Jump power-up.** One pickup is hidden on each level (a bobbing green
+  beacon). Grab it and it **auto-fires once** the next time you'd ride into an
+  **enemy beam**, hopping you clear of it — it won't save you from a wall, the
+  border, or your own trail.
 
 ## Sound
 
 A generous synthesized set: engine drone, turn blips, the 5·4·3·2·1 countdown
 and GO, derez shatter, rival-down confirm, recognizer cannon fire, level-up
-fanfare, spawn, warn, zap, and UI blips.
+fanfare, power-up chime, springy jump whoosh, 1-up jingle, spawn, warn, zap,
+and UI blips.
 
 ## Build & install
 

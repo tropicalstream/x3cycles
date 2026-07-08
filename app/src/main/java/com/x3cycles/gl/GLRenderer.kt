@@ -272,6 +272,13 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 else if (game.powerActive) text("GRAB THE JUMP", 320f, 66f, 1.5f, 0.5f, 1f, 0.7f, pulse * 0.8f)
                 if (game.recognizerCount > 0) text("RECOGNIZERS INBOUND", 320f, 452f, 1.5f, 1f, 0.4f, 0.2f, pulse)
             }
+            GameState.LIFE_LOST -> {
+                bar()
+                text("CYCLE DEREZZED", 320f, 200f, 3f, 1f, 0.45f, 0.35f)
+                val msg = if (game.lives == 1) "1 CYCLE LEFT" else "${game.lives} CYCLES LEFT"
+                text(msg, 320f, 262f, 2f, 1f, 1f, 1f, pulse)
+                text("REGENERATING", 320f, 312f, 1.7f, 0.6f, 0.9f, 1f, pulse)
+            }
             GameState.LEVEL_CLEAR -> {
                 bar()
                 text("LEVEL CLEAR", 320f, 230f, 3.4f, 0.5f, 1f, 0.6f, pulse)
@@ -291,6 +298,19 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         text(opp, 320f - StrokeFont.width(opp, 1.8f) / 2f, 42f, 1.8f, 1f, 0.8f, 0.4f, 1f, center = false)
         val sc = "${game.score}"
         text(sc, 624f - StrokeFont.width(sc, 2f), 42f, 2f, 1f, 1f, 1f, 1f, center = false)
+        livesPips()
+    }
+
+    /** Remaining lives as a row of little up-triangle cycle pips, bottom-left. */
+    private fun livesPips() {
+        val n = game.lives.coerceIn(0, Game.MAX_LIVES)
+        val w = 7f; val h = 13f; val gap = 22f; val py = 458f
+        for (i in 0 until n) {
+            val px = 26f + i * gap
+            hud.line(px, py, 0f, px - w, py + h, 0f, 0.4f, 0.9f, 1f, 1f)
+            hud.line(px, py, 0f, px + w, py + h, 0f, 0.4f, 0.9f, 1f, 1f)
+            hud.line(px - w, py + h, 0f, px + w, py + h, 0f, 0.4f, 0.9f, 1f, 0.9f)
+        }
     }
 
     // ------------------------------------------------------- gl helpers
