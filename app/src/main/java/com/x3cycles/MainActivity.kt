@@ -16,6 +16,7 @@ import kotlin.math.max
 import com.x3cycles.audio.Sfx
 import com.x3cycles.engine.Game
 import com.x3cycles.engine.GameHost
+import com.x3cycles.engine.GameState
 import com.x3cycles.gl.GLRenderer
 
 /**
@@ -37,7 +38,6 @@ class MainActivity : Activity(), GameHost {
     // De-dupe one physical press that may arrive as both KEY and touch.
     private var lastTurn = 0L
     private var downX = 0f
-    private var downT = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,7 +70,10 @@ class MainActivity : Activity(), GameHost {
     // bends it right — relative to the cycle, never to the screen.
     private fun turn(left: Boolean) {
         val now = SystemClock.uptimeMillis()
-        if (now - lastTurn < 60) return // de-dupe KEY+touch of the same physical press
+        // Only meant to swallow a KEY+touch pair from ONE physical press (they
+        // arrive within a few ms). Kept short so two genuinely quick flicks
+        // aren't merged into one.
+        if (now - lastTurn < 25) return
         lastTurn = now
         glView.queueEvent { game.turn(left) } // run on the GL thread
     }
@@ -96,17 +99,22 @@ class MainActivity : Activity(), GameHost {
         // Ignore the left temple volume pad.
         if (ev.device?.name?.contains("cyttsp6", ignoreCase = true) == true) return true
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downX = ev.x; downT = SystemClock.uptimeMillis() }
+            MotionEvent.ACTION_DOWN -> { downX = ev.x }
             MotionEvent.ACTION_UP -> {
                 val dx = ev.x - downX
-                val thresh = max(48f, 0.09f * resources.displayMetrics.widthPixels)
-                if (abs(dx) >= thresh) {
-                    // Right temple pad forward/back axis reads as raw dx, sign
-                    // inverted vs the physical gesture (same inversion the
-                    // x3dflappy horizontal swipe needed on this hardware).
-                    if (dx < 0) turnForward() else turnBack()
-                } else if (SystemClock.uptimeMillis() - downT <= 320) {
-                    turnForward() // plain click: start / retry
+                val playing = game.state == GameState.RACING || game.state == GameState.COUNTDOWN
+                if (playing) {
+                    // In-race the pad only ever means "turn", so classify by the
+                    // SIGN of horizontal travel past a small dead-zone. A low
+                    // threshold is what lets short, quick flicks register (the old
+                    // 0.09*width bar was so high a fast flick fell through to the
+                    // tap branch and was forced into a single fixed direction).
+                    // Sign is inverted vs the physical gesture on this hardware.
+                    val dead = max(16f, 0.02f * resources.displayMetrics.widthPixels)
+                    if (abs(dx) >= dead) { if (dx < 0) turnForward() else turnBack() }
+                } else {
+                    // Title / game-over / respawn: any tap or swipe starts / retries.
+                    turnForward()
                 }
             }
         }

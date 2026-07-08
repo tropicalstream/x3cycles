@@ -25,8 +25,11 @@ fun rightOf(d: Int) = (d + 3) and 3
 class Cycle(var cx: Int, var cz: Int, var dir: Int, val hue: Float, val isPlayer: Boolean) {
     var progress = 0f
     var alive = true
-    var pendingDir = -1
     var derezT = 0f              // >0 while this cycle's beam dissolves away
+    // Queued relative turns (true = left, false = right), one applied per cell.
+    // A FIFO buffer so a rapid double-flick becomes a staircase instead of
+    // collapsing into a single net direction.
+    val pendingTurns = ArrayDeque<Boolean>()
     val trail = ArrayList<IntArray>().apply { add(intArrayOf(cx, cz)) }
     fun headX() = cx + DX[dir] * progress
     fun headZ() = cz + DZ[dir] * progress
@@ -66,6 +69,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         const val MAX_LIVES = 5
         const val EXTRA_LIFE_STEP = 5000
         const val BEAM_DEREZ_DUR = 0.7f   // how long a downed rival's wall dissolves
+        const val MAX_QUEUED_TURNS = 3    // rapid-input buffer depth for the player
     }
 
     var state = GameState.TITLE; private set
@@ -118,9 +122,13 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             GameState.COUNTDOWN, GameState.RACING -> {
                 val p = player ?: return
                 if (!p.alive) return
-                val base = if (p.pendingDir >= 0) p.pendingDir else p.dir
-                p.pendingDir = if (left) leftOf(base) else rightOf(base)
-                host.sfx(Sfx.TURN, if (left) 1f else 1.18f, 0.7f)
+                // Buffer the turn; it's resolved against the live heading when it
+                // reaches the front of the queue (see applyPlayerTurn). Drop only
+                // if the player is mashing well past the buffer depth.
+                if (p.pendingTurns.size < MAX_QUEUED_TURNS) {
+                    p.pendingTurns.addLast(left)
+                    host.sfx(Sfx.TURN, if (left) 1f else 1.18f, 0.7f)
+                }
             }
             else -> {}
         }
@@ -230,11 +238,13 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     private fun applyPlayerTurn(c: Cycle) {
-        if (c.pendingDir >= 0 && c.pendingDir != c.dir && c.pendingDir != opposite(c.dir)) {
-            c.dir = c.pendingDir
-            c.trail.add(intArrayOf(c.cx, c.cz))
-        }
-        c.pendingDir = -1
+        // One queued turn per cell. A single relative turn is always a legal 90°
+        // (never the current heading or a reversal), so it always applies; the
+        // rest wait for upcoming cells, producing a proper staircase.
+        if (c.pendingTurns.isEmpty()) return
+        val left = c.pendingTurns.removeFirst()
+        c.dir = if (left) leftOf(c.dir) else rightOf(c.dir)
+        c.trail.add(intArrayOf(c.cx, c.cz))
     }
 
     private fun opposite(d: Int) = (d + 2) and 3
