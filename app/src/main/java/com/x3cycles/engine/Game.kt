@@ -98,7 +98,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 val p = player ?: return
                 if (!p.alive) return
                 val base = if (p.pendingDir >= 0) p.pendingDir else p.dir
-                p.pendingDir = if (left) leftOf(base) else rightOf(base)
+                // Reversed vs. grid CCW/CW so left-input curves the cycle to the
+                // viewer's left under the isometric camera.
+                p.pendingDir = if (left) rightOf(base) else leftOf(base)
                 host.sfx(Sfx.TURN, if (left) 1f else 1.18f, 0.7f)
             }
             else -> {}
@@ -264,15 +266,15 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         java.util.Arrays.fill(grid, 0)
         cycles.clear(); recognizers.clear(); bolts.clear()
 
-        // Player: bottom-center heading up the grid.
-        val pl = Cycle(GRID / 2, 4, 1, 0.5f, true) // cyan-ish
+        // Player starts near the viewer and rides FORWARD, away up the grid (-z).
+        val pl = Cycle(GRID / 2, GRID - 5, 3, 0.5f, true) // cyan-ish
         occupy(pl)
         cycles.add(pl); player = pl
 
         // Rivals: spread across the far side heading down toward the player.
         for (i in 0 until opponents) {
             val x = (GRID * (i + 1) / (opponents + 1)).coerceIn(3, GRID - 4)
-            val rc = Cycle(x, GRID - 5, 3, (0.02f + i * 0.16f) % 1f, false)
+            val rc = Cycle(x, 4, 1, (0.02f + i * 0.16f) % 1f, false)
             occupy(rc); cycles.add(rc)
         }
         for (i in 0 until recognizerCount) {
