@@ -110,6 +110,10 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val h = game.time * 0.05f
         buildGrid(h)
         buildBorder(h)
+        if (game.state == GameState.TITLE || game.state == GameState.GAME_OVER) {
+            buildMcpTower()
+            if (game.state == GameState.TITLE) buildTitleRider()
+        }
         if (game.powerActive) buildPowerUp(game.powerX.toFloat(), game.powerZ.toFloat())
         for (c in game.cycles) if (c.derezT > 0f) buildDerezTrail(c) else buildTrail(c)
         for (c in game.cycles) if (c.alive) buildCycleHead(c)
@@ -247,6 +251,109 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
     }
 
+    /**
+     * The MONOPOLY CONTROL PROTOCOL, as presented in x3breakout's McpCore —
+     * corporate cyan-violet drifting hostile red, smug pulse, glitch
+     * flicker — rebuilt as a wireframe citadel: tapering rotating rings,
+     * ribs, a scanning eye with spokes, ground halo. Looms at grid centre
+     * over the title (and gloats over the game-over screen).
+     */
+    private fun buildMcpTower() {
+        val t = game.time
+        val x = G / 2f; val z = G / 2f
+        // authority pulse + palette drift (McpCore's language)
+        val pulse = 0.85f + 0.15f * sin(t * 2.2f)
+        val harsh = 0.5f + 0.5f * sin(t * 0.13f)
+        val r = (0.45f + 0.45f * harsh) * pulse
+        val g = (0.22f + 0.28f * (1f - harsh)) * pulse
+        val b = (0.95f - 0.5f * harsh) * pulse
+        // glitch: rare whole-frame flicker + jitter
+        if (sin(t * 43f) > 0.985f) return
+        val jx = sin(t * 31.7f) * 0.06f
+        val jz = cos(t * 27.3f) * 0.05f
+        val cx = x + jx; val cz = z + jz
+
+        // ground halo rings
+        ringY(cx, cz, 5.2f, 0.02f, 20, t * 0.3f, r, g, b, 0.35f)
+        ringY(cx, cz, 6.1f, 0.02f, 20, -t * 0.2f, r, g, b, 0.18f)
+
+        // the citadel: stacked rings tapering up, alternating spin
+        val heights = floatArrayOf(1.6f, 3.6f, 5.6f, 7.4f, 8.8f)
+        val radii = floatArrayOf(3.6f, 3.1f, 2.5f, 1.9f, 1.2f)
+        for (k in heights.indices) {
+            val spin = t * (if (k % 2 == 0) 0.35f else -0.5f)
+            ringY(cx, cz, radii[k], heights[k], 16, spin, r, g, b, 0.75f)
+        }
+        // ribs base ring -> crown ring
+        for (i in 0 until 6) {
+            val a0 = i / 6f * 6.2832f + t * 0.35f
+            val a1 = i / 6f * 6.2832f - t * 0.5f
+            lines.line(
+                cx + cos(a0) * radii[0], heights[0], cz + sin(a0) * radii[0],
+                cx + cos(a1) * radii[4], heights[4], cz + sin(a1) * radii[4],
+                r, g, b, 0.4f
+            )
+        }
+        // the EYE: white-hot scanning point + spokes, mid-tower
+        val eyeY = 6.4f
+        val eyeA = t * 0.8f
+        val ex = cx + cos(eyeA) * 2.2f; val ez = cz + sin(eyeA) * 2.2f
+        fx.v(ex, eyeY, ez, 1f, 0.9f * pulse, 0.85f * pulse, 1f)
+        for (i in 0 until 8) {
+            val a = i / 8f * 6.2832f + t
+            lines.line(
+                ex, eyeY, ez,
+                ex + cos(a) * 0.7f, eyeY + sin(a * 1.7f) * 0.3f, ez + sin(a) * 0.7f,
+                1f, 0.6f, 0.55f, 0.55f * pulse
+            )
+        }
+    }
+
+    /** A horizontal ring of line segments at height y, phase-rotated. */
+    private fun ringY(cx: Float, cz: Float, rad: Float, y: Float, segs: Int, phase: Float, r: Float, g: Float, b: Float, a: Float) {
+        var pa = phase
+        val step = 6.2832f / segs
+        for (i in 0 until segs) {
+            val na = pa + step
+            lines.line(
+                cx + cos(pa) * rad, y, cz + sin(pa) * rad,
+                cx + cos(na) * rad, y, cz + sin(na) * rad,
+                r, g, b, a
+            )
+            pa = na
+        }
+    }
+
+    /** The attract-mode cycle: rides the grid, wall glowing behind it. */
+    private fun buildTitleRider() {
+        val hue = 0.5f
+        hsv(hue, 0.9f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        val pts = game.titleTrail
+        for (i in 0 until pts.size) {
+            val ax = pts[i][0] + 0.5f; val az = pts[i][1] + 0.5f
+            // older corners fade — the beam has a memory, like a real ride
+            val age = (i + 1f) / (pts.size + 1f)
+            lines.line(ax, 0f, az, ax, WH, az, r, g, b, 0.5f * age)
+            if (i > 0) {
+                val bx = pts[i - 1][0] + 0.5f; val bz = pts[i - 1][1] + 0.5f
+                lines.line(ax, 0.02f, az, bx, 0.02f, bz, r, g, b, 0.5f * age)
+                lines.line(ax, WH, az, bx, WH, bz, r, g, b, 0.85f * age)
+            }
+        }
+        val hx = game.titleX + 0.5f; val hz = game.titleZ + 0.5f
+        if (pts.isNotEmpty()) {
+            val lx = pts.last()[0] + 0.5f; val lz = pts.last()[1] + 0.5f
+            lines.line(lx, 0.02f, lz, hx, 0.02f, hz, r, g, b, 0.6f)
+            lines.line(lx, WH, lz, hx, WH, hz, r, g, b, 0.95f)
+        }
+        // the bike itself, nose lit
+        val fx0 = DX[game.titleDir] * 0.5f; val fz0 = DZ[game.titleDir] * 0.5f
+        lines.line(hx - fx0, WH * 0.5f, hz - fz0, hx + fx0, WH * 0.5f, hz + fz0, r, g, b, 1f)
+        lines.line(hx - fz0 * 0.5f, WH * 0.6f, hz + fx0 * 0.5f, hx + fz0 * 0.5f, WH * 0.6f, hz - fx0 * 0.5f, r, g, b, 0.9f)
+        fx.v(hx, WH * 0.6f, hz, 1f, 1f, 1f, 1f)
+    }
+
     private fun buildRecognizer(x: Float, z: Float) {
         val r = 1f; val g = 0.35f; val b = 0.15f
         val s = 0.95f; val ht = 1.8f
@@ -282,9 +389,10 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val hr = rgb[0]; val hg = rgb[1]; val hb = rgb[2]
         when (game.state) {
             GameState.TITLE -> {
-                text("X3 CYCLES", 320f, 150f, 4.6f, hr, hg, hb)
-                text("TURN LEFT OR RIGHT TO RIDE", 320f, 240f, 1.7f, 1f, 1f, 1f, pulse)
-                if (game.bestLevel > 1) text("BEST LEVEL ${game.bestLevel}", 320f, 300f, 1.7f, 0.6f, 1f, 0.7f)
+                text("X3 CYCLES", 320f, 120f, 4.6f, hr, hg, hb)
+                text("THE MONOPOLY CONTROL PROTOCOL HOLDS THE GRID", 320f, 168f, 1.3f, 1f, 0.45f, 0.4f, 0.85f)
+                text("TURN LEFT OR RIGHT TO RIDE", 320f, 396f, 1.7f, 1f, 1f, 1f, pulse)
+                if (game.bestLevel > 1) text("BEST LEVEL ${game.bestLevel}", 320f, 436f, 1.5f, 0.6f, 1f, 0.7f)
             }
             GameState.COUNTDOWN -> {
                 bar()
@@ -313,6 +421,18 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 text("REACHED LEVEL ${game.level}", 320f, 240f, 2f, 0.8f, 0.9f, 1f)
                 text("BEST ${game.bestLevel}", 320f, 285f, 1.8f, 0.6f, 1f, 0.7f)
                 text("TURN TO RETRY", 320f, 360f, 2f, 1f, 1f, 1f, pulse)
+            }
+        }
+        // ---- the MCP's caption: whatever it just said, vector-set and
+        //      auto-shrunk to fit, in its alarm-red register ----
+        if (game.captionT > 0f) {
+            val s = game.caption
+            if (s.isNotEmpty()) {
+                val fade = (game.captionT / 0.6f).coerceAtMost(1f)
+                val scale = minOf(1.6f, 600f / StrokeFont.width(s, 1f))
+                val y = if (game.state == GameState.TITLE) 210f else 424f
+                text("MCP", 320f, y - 16f * scale, scale * 0.75f, 1f, 0.3f, 0.25f, 0.8f * fade)
+                text(s, 320f, y, scale, 1f, 0.55f, 0.5f, fade)
             }
         }
     }

@@ -8,3 +8,9 @@ local.properties
 *.iml
 captures/
 .kotlin/
+fish.config
+*.jks
+*.keystore
+*.pem
+*.p12
+*.env

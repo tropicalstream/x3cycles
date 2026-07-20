@@ -14,6 +14,7 @@ import android.view.WindowManager
 import kotlin.math.abs
 import kotlin.math.max
 import com.x3cycles.audio.Sfx
+import com.x3cycles.audio.Voice
 import com.x3cycles.engine.Game
 import com.x3cycles.engine.GameHost
 import com.x3cycles.engine.GameState
@@ -31,6 +32,7 @@ class MainActivity : Activity(), GameHost {
 
     private lateinit var store: SettingsStore
     private lateinit var sfx: Sfx
+    private lateinit var voice: Voice
     private lateinit var game: Game
     private lateinit var glView: GLSurfaceView
     private lateinit var renderer: GLRenderer
@@ -43,6 +45,7 @@ class MainActivity : Activity(), GameHost {
         super.onCreate(savedInstanceState)
         store = SettingsStore(this)
         sfx = Sfx(this).also { it.loadAsync() }
+        voice = Voice(this).also { it.load() }
         game = Game(store, this)
         renderer = GLRenderer(game).also { it.sbs = store.sbs }
 
@@ -63,6 +66,8 @@ class MainActivity : Activity(), GameHost {
     override fun sfx(id: Int, pitch: Float, vol: Float) = sfx.play(id, pitch, vol)
     override fun startDrone() = sfx.startDrone()
     override fun stopDrone() = sfx.stopDrone()
+    override fun voice(priority: Int, vararg events: String): String? = voice.play(priority, *events)
+    override fun titleMusic(on: Boolean) = voice.titleMusic(on)
 
     // --------------------------------------------------------------- input
 
@@ -127,15 +132,19 @@ class MainActivity : Activity(), GameHost {
         super.onResume()
         hideSystemBars()
         glView.onResume()
+        // returning to a title screen restarts the IO Tower theme
+        if (game.state == GameState.TITLE) voice.titleMusic(true)
     }
 
     override fun onPause() {
         sfx.stopDrone()
+        voice.pauseAll()
         glView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        voice.release()
         sfx.release()
         super.onDestroy()
     }

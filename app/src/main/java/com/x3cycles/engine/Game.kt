@@ -14,6 +14,11 @@ interface GameHost {
     fun sfx(id: Int, pitch: Float = 1f, vol: Float = 1f)
     fun startDrone()
     fun stopDrone()
+    /** MCP speaks: first event with lines wins; returns the quote for the caption.
+     *  `priority` guards against interrupting a line already in progress. */
+    fun voice(priority: Int, vararg events: String): String?
+    /** The IO Tower theme under the title grid. */
+    fun titleMusic(on: Boolean)
 }
 
 // Grid directions: 0=+x, 1=+z, 2=-x, 3=-z.
@@ -108,6 +113,56 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var jumpArmed = false; private set      // collected, waiting to auto-fire
     var jumpAnim = 0f; private set          // >0 briefly after a hop (for FX)
 
+    // ---- the MCP's voice: caption of whatever it just said ----
+    var caption = ""; private set
+    var captionT = 0f; private set
+    private var saidTitleLine = false
+
+    // priority 1 = story beat (start / clear / life lost / game over / title),
+    // priority 0 = incidental (kill taunt, extra life). A beat can override a
+    // taunt in progress; nothing overrides a beat; nothing overrides its equal.
+    private fun mcpSays(vararg events: String, priority: Int = 1) {
+        val quote = host.voice(priority, *events) ?: return
+        caption = quote.uppercase()
+        captionT = 4.6f
+    }
+
+    // ---- the title attract: a riderless demo cycle circling the MCP ----
+    // Corner list in grid space (floats); head at the end. Renderer draws it
+    // exactly like a live trail.
+    val titleTrail = ArrayList<FloatArray>()
+    var titleX = 8f; private set
+    var titleZ = 30f; private set
+    var titleDir = 0; private set
+    private var titleTurnIn = 2.2f
+
+    private fun updateTitleRider(dt: Float) {
+        val sp = BASE_SPEED * 0.85f
+        titleX += DX[titleDir] * sp * dt
+        titleZ += DZ[titleDir] * sp * dt
+        titleTurnIn -= dt
+        // steer: keep circling the central tower — turn when the border nears
+        // or on a lazy timer, always keeping ~6 cells clear of the walls
+        val margin = 7f
+        val nearBorder = titleX < margin || titleX > GRID - margin ||
+            titleZ < margin || titleZ > GRID - margin
+        if (nearBorder || titleTurnIn <= 0f) {
+            titleTrail.add(floatArrayOf(titleX, titleZ))
+            // rotate left around the grid centre (counter-clockwise orbit)
+            titleDir = leftOf(titleDir)
+            // if that still points outward, keep turning
+            var guard = 0
+            while (guard++ < 3) {
+                val nx = titleX + DX[titleDir] * 3f
+                val nz = titleZ + DZ[titleDir] * 3f
+                if (nx > 4f && nx < GRID - 4f && nz > 4f && nz < GRID - 4f) break
+                titleDir = leftOf(titleDir)
+            }
+            titleTurnIn = 1.4f + rng.nextFloat() * 2.2f
+            while (titleTrail.size > 22) titleTrail.removeAt(0)
+        }
+    }
+
     fun boot() {
         highScore = store.highScore
         bestLevel = store.bestLevel
@@ -140,10 +195,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         time += dt
         shake = maxOf(0f, shake - dt * 3f)
         jumpAnim = maxOf(0f, jumpAnim - dt * 2.5f)
+        captionT = maxOf(0f, captionT - dt)
         updateParticles(dt)
         updateDerez(dt)
         when (state) {
-            GameState.TITLE -> {}
+            GameState.TITLE -> updateTitleRider(dt)
             GameState.COUNTDOWN -> {
                 countdown -= dt
                 val c = countInt
@@ -155,7 +211,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 if (countdown <= 0f) { state = GameState.RACING; host.startDrone() }
             }
             GameState.RACING -> updateRacing(dt)
-            GameState.LIFE_LOST -> { lifeLostTimer -= dt; if (lifeLostTimer <= 0f) startLevel(level) }
+            GameState.LIFE_LOST -> { lifeLostTimer -= dt; if (lifeLostTimer <= 0f) startLevel(level, respawn = true) }
             GameState.LEVEL_CLEAR -> { clearTimer -= dt; if (clearTimer <= 0f) startLevel(level + 1) }
             GameState.GAME_OVER -> {}
         }
@@ -171,9 +227,10 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         if (opponentsAlive == 0) {
             addScore(500 * level)
             state = GameState.LEVEL_CLEAR
-            clearTimer = 2.2f
+            clearTimer = 3.4f   // room for the clear line to finish before the next start line
             host.stopDrone()
             host.sfx(Sfx.LEVELUP)
+            mcpSays("l%02d_clear".format(level), "level_clear")
         }
     }
 
@@ -187,6 +244,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             state = GameState.LIFE_LOST
             lifeLostTimer = 1.9f
             host.sfx(Sfx.WARN, 0.7f, 0.8f)
+            mcpSays("life_lost")
         }
     }
 
@@ -195,7 +253,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         score += n
         while (score >= nextLifeScore) {
             nextLifeScore += EXTRA_LIFE_STEP
-            if (lives < MAX_LIVES) { lives++; host.sfx(Sfx.EXTRA) }
+            if (lives < MAX_LIVES) {
+                lives++
+                host.sfx(Sfx.EXTRA)
+                mcpSays("extra_life", priority = 0)
+            }
         }
         if (score > highScore) { highScore = score; store.highScore = score }
     }
@@ -295,6 +357,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         if (!c.isPlayer) {
             addScore(100 * level); host.sfx(Sfx.KILL, 1f, 0.9f)
             beamDerez(c) // only THIS rival's light wall powers down
+            // the MCP does not appreciate losing riders (incidental — never
+            // cuts off a level-clear or start beat)
+            if (rng.nextFloat() < 0.4f && opponentsAlive > 0) mcpSays("kill_taunt", priority = 0)
         }
     }
 
@@ -415,7 +480,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         startLevel(1)
     }
 
-    private fun startLevel(lv: Int) {
+    private fun startLevel(lv: Int, respawn: Boolean = false) {
         level = lv
         speed = BASE_SPEED + (lv - 1) * SPEED_STEP
         val opponents = ((lv - 1) % 5) + 1
@@ -444,7 +509,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         countdown = COUNT_SECS
         lastBeep = -1
         state = GameState.COUNTDOWN
+        host.titleMusic(false)
         host.sfx(Sfx.START)
+        // On a respawn you're mid-level — don't replay the intro taunt (and
+        // don't let it step on the life-lost line still finishing).
+        if (!respawn) mcpSays("l%02d_start".format(lv), "level_start")
         if (lv > bestLevel) { bestLevel = lv; store.bestLevel = lv }
         if (score > highScore) { highScore = score; store.highScore = score }
     }
@@ -482,6 +551,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         state = GameState.GAME_OVER
         host.stopDrone()
         host.sfx(Sfx.GAMEOVER)
+        mcpSays("game_over")
         if (score > highScore) { highScore = score; store.highScore = score }
     }
 
@@ -491,6 +561,15 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         player = null
         powerActive = false; jumpArmed = false; jumpAnim = 0f
         host.stopDrone()
+        // the attract loop: IO Tower theme + a demo cycle circling the MCP
+        titleTrail.clear()
+        titleX = 8f; titleZ = 30f; titleDir = 0; titleTurnIn = 2.2f
+        titleTrail.add(floatArrayOf(titleX, titleZ))
+        host.titleMusic(true)
+        if (!saidTitleLine) {
+            saidTitleLine = true
+            mcpSays("title")
+        }
     }
 
     // ----------------------------------------------------------- particles
