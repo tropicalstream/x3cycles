@@ -324,34 +324,37 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
     }
 
-    /** The attract-mode cycle: rides the grid, wall glowing behind it. */
+    /** The attract cycle rides the letters of "X3 PRO", its wall spelling them. */
     private fun buildTitleRider() {
-        val hue = 0.5f
-        hsv(hue, 0.9f, 1f)
+        val a = game.titleWordAlpha
+        if (a <= 0.01f) return
+        hsv(0.5f, 0.9f, 1f)
         val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
-        val pts = game.titleTrail
-        for (i in 0 until pts.size) {
-            val ax = pts[i][0] + 0.5f; val az = pts[i][1] + 0.5f
-            // older corners fade — the beam has a memory, like a real ride
-            val age = (i + 1f) / (pts.size + 1f)
-            lines.line(ax, 0f, az, ax, WH, az, r, g, b, 0.5f * age)
-            if (i > 0) {
-                val bx = pts[i - 1][0] + 0.5f; val bz = pts[i - 1][1] + 0.5f
-                lines.line(ax, 0.02f, az, bx, 0.02f, bz, r, g, b, 0.5f * age)
-                lines.line(ax, WH, az, bx, WH, bz, r, g, b, 0.85f * age)
+        val segs = game.titleWordSegs
+        val rev = game.titleReveal
+        var acc = 0f
+        for (i in segs.indices) {
+            val q = segs[i]
+            val x0 = q[0]; val z0 = q[1]; var x1 = q[2]; var z1 = q[3]
+            val segLen = kotlin.math.hypot((x1 - x0).toDouble(), (z1 - z0).toDouble()).toFloat()
+            if (acc >= rev) break                          // not yet drawn
+            if (acc + segLen > rev) {                      // straddles the frontier: clip it
+                val f = ((rev - acc) / segLen).coerceIn(0f, 1f)
+                x1 = x0 + (x1 - x0) * f; z1 = z0 + (z1 - z0) * f
             }
+            acc += segLen
+            // the glowing wall: floor + crown edges, and a post at each end
+            lines.line(x0, 0.02f, z0, x1, 0.02f, z1, r, g, b, 0.5f * a)
+            lines.line(x0, WH, z0, x1, WH, z1, r, g, b, 0.9f * a)
+            lines.line(x0, 0f, z0, x0, WH, z0, r, g, b, 0.5f * a)
+            lines.line(x1, 0f, z1, x1, WH, z1, r, g, b, 0.5f * a)
         }
-        val hx = game.titleX + 0.5f; val hz = game.titleZ + 0.5f
-        if (pts.isNotEmpty()) {
-            val lx = pts.last()[0] + 0.5f; val lz = pts.last()[1] + 0.5f
-            lines.line(lx, 0.02f, lz, hx, 0.02f, hz, r, g, b, 0.6f)
-            lines.line(lx, WH, lz, hx, WH, hz, r, g, b, 0.95f)
-        }
-        // the bike itself, nose lit
-        val fx0 = DX[game.titleDir] * 0.5f; val fz0 = DZ[game.titleDir] * 0.5f
-        lines.line(hx - fx0, WH * 0.5f, hz - fz0, hx + fx0, WH * 0.5f, hz + fz0, r, g, b, 1f)
-        lines.line(hx - fz0 * 0.5f, WH * 0.6f, hz + fx0 * 0.5f, hx + fz0 * 0.5f, WH * 0.6f, hz - fx0 * 0.5f, r, g, b, 0.9f)
-        fx.v(hx, WH * 0.6f, hz, 1f, 1f, 1f, 1f)
+        // the drawing bike at the frontier, nose lit along its heading
+        val hx = game.titleX; val hz = game.titleZ
+        val dx = game.titleHeadDX; val dz = game.titleHeadDZ
+        lines.line(hx - dx * 0.5f, WH * 0.5f, hz - dz * 0.5f, hx + dx * 0.5f, WH * 0.5f, hz + dz * 0.5f, r, g, b, 1f)
+        lines.line(hx - dz * 0.4f, WH * 0.6f, hz + dx * 0.4f, hx + dz * 0.4f, WH * 0.6f, hz - dx * 0.4f, r, g, b, 0.9f)
+        fx.v(hx, WH * 0.6f, hz, 1f, 1f, 1f, a)
     }
 
     private fun buildRecognizer(x: Float, z: Float) {

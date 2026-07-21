@@ -2,6 +2,7 @@ package com.x3cycles.engine
 
 import com.x3cycles.SettingsStore
 import com.x3cycles.audio.Sfx
+import com.x3cycles.gl.StrokeFont
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -127,40 +128,76 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         captionT = 4.6f
     }
 
-    // ---- the title attract: a riderless demo cycle circling the MCP ----
-    // Corner list in grid space (floats); head at the end. Renderer draws it
-    // exactly like a live trail.
-    val titleTrail = ArrayList<FloatArray>()
+    // ---- the title attract: a demo cycle draws "X3 PRO" in light on the grid ----
+    // Word strokes in grid space [x0,z0,x1,z1], in draw order; the cycle rides
+    // them so its light wall spells the product name, then holds and redraws.
+    val titleWordSegs = ArrayList<FloatArray>()
+    private var titleWordLen = FloatArray(0)
+    private var titleWordTotal = 0.001f
+    var titleReveal = 0f; private set        // grid-length of the word drawn so far
+    var titleWordAlpha = 1f; private set     // fades on the loop tail before a redraw
     var titleX = 8f; private set
     var titleZ = 30f; private set
-    var titleDir = 0; private set
-    private var titleTurnIn = 2.2f
+    var titleHeadDX = 1f; private set        // drawing-head heading (the bike's nose)
+    var titleHeadDZ = 0f; private set
+    private var titleDrawT = 0f
+
+    /** Lay "X3 PRO" onto the floor as grid-space wall strokes, reusing the HUD
+     *  vector font. Built once; a clear strip in front of the tower. */
+    private fun buildTitleWord() {
+        if (titleWordSegs.isNotEmpty()) return
+        val word = "X3 PRO"
+        val s = 0.6f
+        val inv = 0.70710677f                              // 1/sqrt(2)
+        // Rotate the word onto the isometric screen axes so it reads upright and
+        // horizontal (screen-right on the floor is (+x,-z), screen-up is (-x,-z)),
+        // centred on a clear band in front of the central tower.
+        val cX = 24f; val cZ = 28f                         // desired on-screen centre (world)
+        val half = word.length * StrokeFont.ADVANCE * s / 2f
+        val wx = cX - (half - 3f * s) * inv
+        val wz = cZ + (half + 3f * s) * inv
+        val sink = object : StrokeFont.LineSink {
+            // draw() runs at baseline (0,0): x0 is the pen x, y0 the pen y (screen-down)
+            override fun line(x0: Float, y0: Float, x1: Float, y1: Float) {
+                titleWordSegs.add(floatArrayOf(
+                    wx + (x0 + y0) * inv, wz - (x0 - y0) * inv,
+                    wx + (x1 + y1) * inv, wz - (x1 - y1) * inv))
+            }
+        }
+        StrokeFont.draw(word, 0f, 0f, s, sink)
+        titleWordLen = FloatArray(titleWordSegs.size)
+        var acc = 0f
+        for (i in titleWordSegs.indices) {
+            val q = titleWordSegs[i]
+            acc += hypot((q[2] - q[0]).toDouble(), (q[3] - q[1]).toDouble()).toFloat()
+            titleWordLen[i] = acc
+        }
+        titleWordTotal = acc.coerceAtLeast(0.001f)
+    }
 
     private fun updateTitleRider(dt: Float) {
-        val sp = BASE_SPEED * 0.85f
-        titleX += DX[titleDir] * sp * dt
-        titleZ += DZ[titleDir] * sp * dt
-        titleTurnIn -= dt
-        // steer: keep circling the central tower — turn when the border nears
-        // or on a lazy timer, always keeping ~6 cells clear of the walls
-        val margin = 7f
-        val nearBorder = titleX < margin || titleX > GRID - margin ||
-            titleZ < margin || titleZ > GRID - margin
-        if (nearBorder || titleTurnIn <= 0f) {
-            titleTrail.add(floatArrayOf(titleX, titleZ))
-            // rotate left around the grid centre (counter-clockwise orbit)
-            titleDir = leftOf(titleDir)
-            // if that still points outward, keep turning
-            var guard = 0
-            while (guard++ < 3) {
-                val nx = titleX + DX[titleDir] * 3f
-                val nz = titleZ + DZ[titleDir] * 3f
-                if (nx > 4f && nx < GRID - 4f && nz > 4f && nz < GRID - 4f) break
-                titleDir = leftOf(titleDir)
-            }
-            titleTurnIn = 1.4f + rng.nextFloat() * 2.2f
-            while (titleTrail.size > 22) titleTrail.removeAt(0)
-        }
+        buildTitleWord()
+        val draw = 5f; val hold = 3.5f; val fade = 1.3f; val loop = draw + hold + fade
+        titleDrawT += dt
+        if (titleDrawT >= loop) titleDrawT -= loop
+        val t = titleDrawT
+        val frac = (t / draw).coerceAtMost(1f)
+        titleWordAlpha = if (t <= draw + hold) 1f else (1f - (t - draw - hold) / fade).coerceIn(0f, 1f)
+        val fe = frac * frac * (3f - 2f * frac)            // ease the sweep in and out
+        titleReveal = fe * titleWordTotal
+        // ride the drawing head along to the frontier of the revealed word
+        if (titleWordSegs.isEmpty()) return
+        var i = 0
+        while (i < titleWordLen.size - 1 && titleWordLen[i] < titleReveal) i++
+        val seg = titleWordSegs[i]
+        val segStart = if (i == 0) 0f else titleWordLen[i - 1]
+        val segLen = (titleWordLen[i] - segStart).coerceAtLeast(1e-4f)
+        val f = ((titleReveal - segStart) / segLen).coerceIn(0f, 1f)
+        titleX = seg[0] + (seg[2] - seg[0]) * f
+        titleZ = seg[1] + (seg[3] - seg[1]) * f
+        val ddx = seg[2] - seg[0]; val ddz = seg[3] - seg[1]
+        val dl = hypot(ddx.toDouble(), ddz.toDouble()).toFloat().coerceAtLeast(1e-4f)
+        titleHeadDX = ddx / dl; titleHeadDZ = ddz / dl
     }
 
     fun boot() {
@@ -561,10 +598,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         player = null
         powerActive = false; jumpArmed = false; jumpAnim = 0f
         host.stopDrone()
-        // the attract loop: IO Tower theme + a demo cycle circling the MCP
-        titleTrail.clear()
-        titleX = 8f; titleZ = 30f; titleDir = 0; titleTurnIn = 2.2f
-        titleTrail.add(floatArrayOf(titleX, titleZ))
+        // the attract loop: IO Tower theme + a demo cycle drawing "X3 PRO"
+        titleDrawT = 0f
         host.titleMusic(true)
         if (!saidTitleLine) {
             saidTitleLine = true
