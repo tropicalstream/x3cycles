@@ -5,6 +5,13 @@ rendered in OpenGL ES 3.0 as additive neon lines on black (which on the
 waveguide floats as light on the world). Ride the grid at constant speed,
 leave a light wall behind you, and outlast your rivals — but don't clip a wall.
 
+## Screenshots
+
+<p>
+  <img src="images/title.png" width="45%" alt="X3 Cycles title screen">
+  <img src="images/gameplay.png" width="45%" alt="X3 Cycles isometric grid with light-cycle trail">
+</p>
+
 Built on the X3 suite's proven tech: 640×480-logical HUD, binocular
 side-by-side (stereo viewports, auto-on for the glasses), pure-black canvas,
 RayNeo detection, high-score/level persistence, and a big bank of
