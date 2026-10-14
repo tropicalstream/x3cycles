@@ -38,7 +38,9 @@ class Sfx(private val context: Context) {
         const val EXTRA = 16      // bonus life ("1-UP")
         const val BEAMOUT = 17    // a downed rival's light wall powering off
         const val DRONE = 18
-        private const val COUNT = 19
+        const val REMIX_BEAT = 19 // 140 BPM Tempest 2000 acid techno loop
+        const val SUPERZAP = 20   // Superzapper orbital lightning blast
+        private const val COUNT = 21
         private const val RATE = 22050
     }
 
@@ -80,6 +82,8 @@ class Sfx(private val context: Context) {
                 ids[EXTRA] = load(dir, "extra", arpeggio(intArrayOf(784, 1046, 1318, 1568, 2093), 68, 0.7f))
                 ids[BEAMOUT] = load(dir, "beamout", synthBeamOut())
                 ids[DRONE] = load(dir, "drone", synthDrone())
+                ids[REMIX_BEAT] = load(dir, "remix_beat", synthRemixBeat())
+                ids[SUPERZAP] = load(dir, "superzap", synthSuperzap())
                 loaded = true
             }
         }.start()
@@ -92,10 +96,11 @@ class Sfx(private val context: Context) {
         pool.play(s, v, v, 1, 0, pitch.coerceIn(0.5f, 2f))
     }
 
-    fun startDrone() {
+    fun startDrone(remix: Boolean = false) {
         if (!loaded || droneStream != 0) return
-        val v = (volume * 0.45f).coerceIn(0f, 1f)
-        droneStream = pool.play(ids[DRONE], v, v, 0, -1, 1f)
+        val v = (volume * (if (remix) 0.55f else 0.45f)).coerceIn(0f, 1f)
+        val clipId = if (remix && ids[REMIX_BEAT] != 0) ids[REMIX_BEAT] else ids[DRONE]
+        droneStream = pool.play(clipId, v, v, 0, -1, 1f)
     }
 
     fun stopDrone() { if (droneStream != 0) { pool.stop(droneStream); droneStream = 0 } }
@@ -147,6 +152,38 @@ class Sfx(private val context: Context) {
     private fun synthDrone(): ShortArray = buf(2000) { t ->
         val throb = 0.7f + 0.3f * sin(2f * PI.toFloat() * 4f * t)
         (saw(70f, t) * 0.3f + saw(70.6f, t) * 0.3f + sine(140f, t) * 0.2f) * throb * 0.5f
+    }
+
+    /** 140 BPM Tempest 2000 16-step Acid Bass + 909 Kick + Hi-Hat Loop (1714 ms exact bar). */
+    private fun synthRemixBeat(): ShortArray {
+        val bassFreqs = floatArrayOf(
+            73.42f, 73.42f, 146.83f, 73.42f, 87.31f, 73.42f, 110.0f, 98.0f,
+            73.42f, 146.83f, 73.42f, 116.54f, 110.0f, 98.0f, 87.31f, 82.41f
+        )
+        val stepDur = 0.10714f // 60 / 140 / 4
+        return buf(1714) { t ->
+            val step = ((t / stepDur).toInt()).coerceIn(0, 15)
+            val st = t - step * stepDur
+            // 909 Kick on steps 0, 4, 8, 12
+            val kick = if (step % 4 == 0) {
+                val kf = 135f * exp(-st * 28f) + 36f
+                sine(kf, st) * exp(-st * 11f) * 0.55f
+            } else 0f
+            // Offbeat open hat on steps 2, 6, 10, 14
+            val hat = if (step % 4 == 2) noise() * exp(-st * 24f) * 0.22f
+                      else noise() * exp(-st * 55f) * 0.08f
+            // TB-303 Acid Saw + Octave Harmonic + Turbine Sub
+            val bf = bassFreqs[step]
+            val env = exp(-st * 14f)
+            val acid = (saw(bf, t) * 0.32f + sq(bf * 2f, t) * 0.18f * env + sine(bf * 0.5f, t) * 0.22f) * (0.4f + 0.6f * env)
+            (kick + hat + acid) * 0.72f
+        }
+    }
+
+    /** Superzapper orbital lightning cascade. */
+    private fun synthSuperzap(): ShortArray = buf(480) { t ->
+        val sweep = 1900f * exp(-t * 6.5f) + 80f
+        (saw(sweep, t) * 0.45f + sq(sweep * 1.5f, t) * 0.25f + noise() * 0.35f) * exp(-t * 3.8f) * 0.7f
     }
 
     private fun arpeggio(freqs: IntArray, noteMs: Int, amp: Float): ShortArray {

@@ -66,14 +66,20 @@ class Voice(private val context: Context) {
             if (list.isEmpty()) continue
             val line = list.random()
             synchronized(gate) {
-                if (activePriority >= 0) {
+                if (priority >= 2) {
+                    // Immediate Remix 2000 arcade callout or menu mode toggle
+                    pending = null
+                    pendingPriority = -1
+                    activePriority = priority
+                } else if (activePriority >= 0) {
                     if (priority < 1) return null                 // lost to the moment
                     if (priority < pendingPriority) return null   // a bigger beat already waits
                     pending = line
                     pendingPriority = priority
                     return line.quote
+                } else {
+                    activePriority = priority
                 }
-                activePriority = priority
             }
             main.post { speak(line.id) }
             return line.quote

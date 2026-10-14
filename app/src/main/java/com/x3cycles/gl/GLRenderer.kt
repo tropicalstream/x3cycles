@@ -8,6 +8,8 @@ import com.x3cycles.engine.DX
 import com.x3cycles.engine.DZ
 import com.x3cycles.engine.Game
 import com.x3cycles.engine.GameState
+import com.x3cycles.engine.RemixPowerType
+import com.x3cycles.engine.RemixPowerUp
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -38,12 +40,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val ortho = FloatArray(16)
     private val rgb = FloatArray(3)
 
-    private val lines = Batch(20000)
-    private val fx = Batch(4000)
-    private val hud = Batch(4000)
+    private val lines = Batch(32000)
+    private val fx = Batch(6000)
+    private val hud = Batch(6000)
 
     private val G = Game.GRID.toFloat()
     private val WH = Game.WALL_H
+    private var camDirX = 0f
+    private var camDirZ = -1f
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glClearColor(0f, 0f, 0f, 1f)
@@ -76,18 +80,48 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(program)
 
-        // Isometric camera, following the player (or the arena centre).
         val p = game.player
-        var cx = if (p != null) p.headX() else G / 2f
-        var cz = if (p != null) p.headZ() else G / 2f
-        if (game.shake > 0.1f) { cx += (sin(game.time * 53f)) * game.shake * 0.02f; cz += (sin(game.time * 61f)) * game.shake * 0.02f }
-        Matrix.setLookAtM(view, 0, cx + 26f, 32f, cz + 26f, cx, 0f, cz, 0f, 1f, 0f)
+        var cx = if (p != null) p.headX() + 0.5f else G / 2f
+        var cz = if (p != null) p.headZ() + 0.5f else G / 2f
+        if (game.shake > 0.1f) {
+            cx += (sin(game.time * 53f)) * game.shake * 0.02f
+            cz += (sin(game.time * 61f)) * game.shake * 0.02f
+        }
 
         val eyes = if (sbs) 2 else 1
         val vw = if (sbs) width / 2 else width
         val aspect = vw.toFloat() / height.toFloat()
-        val v = 15f
-        Matrix.orthoM(proj, 0, -v * aspect, v * aspect, -v, v, 1f, 300f)
+
+        val inRemix3D = game.remixMode && game.state != GameState.TITLE && game.state != GameState.GAME_OVER
+        if (inRemix3D && game.state == GameState.LEVEL_CLEAR) {
+            // Tempest 2000 3D Web Warp Tunnel Perspective Camera
+            Matrix.setLookAtM(view, 0, G / 2f, 12f, G / 2f + 6f, G / 2f, 12f, G / 2f - 40f, 0f, 1f, 0f)
+            Matrix.perspectiveM(proj, 0, 74f, aspect, 0.3f, 200f)
+        } else if (inRemix3D && p != null) {
+            // Smooth 3/4 Elevated 3D Chase Camera behind the Light Cycle
+            val targetDX = DX[p.dir].toFloat()
+            val targetDZ = DZ[p.dir].toFloat()
+            val lerp = minOf(1f, dt * 8.5f)
+            camDirX += (targetDX - camDirX) * lerp
+            camDirZ += (targetDZ - camDirZ) * lerp
+            val len = kotlin.math.hypot(camDirX.toDouble(), camDirZ.toDouble()).toFloat().coerceAtLeast(0.01f)
+            val ndx = camDirX / len
+            val ndz = camDirZ / len
+            // Slight 3/4 lateral offset so the emerging Light Wall never obscures the cycle
+            val rx = -ndz
+            val rz = ndx
+            val eyeX = cx - ndx * 5.2f + rx * 0.85f
+            val eyeY = 2.85f + game.jumpAnim * 0.45f
+            val eyeZ = cz - ndz * 5.2f + rz * 0.85f
+            Matrix.setLookAtM(view, 0, eyeX, eyeY, eyeZ, cx + ndx * 5.5f, 0.55f, cz + ndz * 5.5f, 0f, 1f, 0f)
+            val fov = if (game.turboTimer > 0f) 72f else 62f
+            Matrix.perspectiveM(proj, 0, fov, aspect, 0.3f, 180f)
+        } else {
+            // Classic Isometric Camera
+            Matrix.setLookAtM(view, 0, cx + 26f, 32f, cz + 26f, cx, 0f, cz, 0f, 1f, 0f)
+            val v = 15f
+            Matrix.orthoM(proj, 0, -v * aspect, v * aspect, -v, v, 1f, 300f)
+        }
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
 
         for (e in 0 until eyes) {
@@ -107,16 +141,31 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     private fun buildScene() {
         lines.reset(); fx.reset()
-        val h = game.time * 0.05f
+        if (game.remixMode && game.state == GameState.LEVEL_CLEAR) {
+            buildWarpTunnel3D()
+            return
+        }
+        val h = game.time * (if (game.remixMode) 0.14f else 0.05f)
         buildGrid(h)
         buildBorder(h)
+        if (game.remixMode) {
+            buildHorizonArch()
+        }
         if (game.state == GameState.TITLE || game.state == GameState.GAME_OVER) {
             buildMcpTower()
             if (game.state == GameState.TITLE) buildTitleRider()
         }
         if (game.powerActive) buildPowerUp(game.powerX.toFloat(), game.powerZ.toFloat())
+        if (game.remixMode) {
+            for (rp in game.remixPowerUps) buildRemixPowerUp(rp)
+            buildIdentityDiscs()
+            buildSuperzapBolts()
+            buildPopups3D()
+        }
         for (c in game.cycles) if (c.derezT > 0f) buildDerezTrail(c) else buildTrail(c)
-        for (c in game.cycles) if (c.alive) buildCycleHead(c)
+        for (c in game.cycles) if (c.alive) {
+            if (game.remixMode) buildRemixCycle3D(c) else buildCycleHead(c)
+        }
         buildJumpCharge()
         for (r in game.recognizers) buildRecognizer(r.x, r.z)
         for (b in game.bolts) {
@@ -213,6 +262,237 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         lines.line(hx - fx0, WH * 0.5f, hz - fz0, hx + fx0, WH * 0.5f, hz + fz0, r, g, b, 1f)
         lines.line(hx - fz0 * 0.5f, WH * 0.6f, hz + fx0 * 0.5f, hx + fz0 * 0.5f, WH * 0.6f, hz - fx0 * 0.5f, r, g, b, 0.9f)
         fx.v(hx, WH * 0.6f, hz, 1f, 1f, 1f, 1f)
+    }
+
+    /** Full 3D Sculpted Light Cycle Model for REMIX 2000 Mode (Hubless wheels, canopy arch, side cowls, dorsal Identity Disc). */
+    private fun buildRemixCycle3D(c: com.x3cycles.engine.Cycle) {
+        val hx = c.headX() + 0.5f
+        val hz = c.headZ() + 0.5f
+        val baseY = if (c.isPlayer) sin(game.jumpAnim * 3.14159f) * 1.15f else 0f
+        hsv(c.hue, 0.75f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+
+        val fxDir = DX[c.dir].toFloat()
+        val fzDir = DZ[c.dir].toFloat()
+        val rxDir = -fzDir
+        val rzDir = fxDir
+
+        val roll = c.visualRoll
+        val cosR = cos(roll)
+        val sinR = sin(roll)
+
+        fun ptX(fwd: Float, side: Float, up: Float): Float {
+            val bankedSide = side * cosR - up * sinR
+            return hx + fxDir * fwd + rxDir * bankedSide
+        }
+        fun ptY(side: Float, up: Float): Float {
+            return baseY + up * cosR + side * sinR
+        }
+        fun ptZ(fwd: Float, side: Float, up: Float): Float {
+            val bankedSide = side * cosR - up * sinR
+            return hz + fzDir * fwd + rzDir * bankedSide
+        }
+        fun seg3D(f0: Float, s0: Float, u0: Float, f1: Float, s1: Float, u1: Float, cr: Float, cg: Float, cb: Float, ca: Float) {
+            lines.line(
+                ptX(f0, s0, u0), ptY(s0, u0), ptZ(f0, s0, u0),
+                ptX(f1, s1, u1), ptY(s1, u1), ptZ(f1, s1, u1),
+                cr, cg, cb, ca
+            )
+        }
+
+        // 1. Front & Rear Hubless Neon Wheels with Spinning Turbine Spokes
+        val wheelR = 0.28f
+        for (wf in floatArrayOf(0.46f, -0.46f)) {
+            for (side in floatArrayOf(-0.14f, 0.14f)) {
+                val segs = 12
+                for (i in 0 until segs) {
+                    val a0 = i * 6.2832f / segs
+                    val a1 = (i + 1) * 6.2832f / segs
+                    seg3D(
+                        wf + cos(a0) * wheelR, side, wheelR + sin(a0) * wheelR,
+                        wf + cos(a1) * wheelR, side, wheelR + sin(a1) * wheelR,
+                        r, g, b, 0.95f
+                    )
+                }
+            }
+            // Spinning inner turbine spokes
+            for (sp in 0 until 3) {
+                val sa = -game.time * 14f + sp * 1.047f
+                val dc = cos(sa) * wheelR * 0.82f
+                val ds = sin(sa) * wheelR * 0.82f
+                seg3D(wf - dc, 0f, wheelR - ds, wf + dc, 0f, wheelR + ds, 1f, 1f, 1f, 0.85f)
+            }
+        }
+
+        // 2. Sculpted Aerodynamic Canopy Arch & Side Fairing Ribs
+        for (side in floatArrayOf(-0.18f, 0.18f)) {
+            seg3D(0.72f, side * 0.6f, 0.24f, 0.35f, side, 0.56f, r, g, b, 0.95f)
+            seg3D(0.35f, side, 0.56f, -0.10f, side * 1.05f, 0.68f, r, g, b, 0.95f)
+            seg3D(-0.10f, side * 1.05f, 0.68f, -0.52f, side * 0.85f, 0.48f, r, g, b, 0.95f)
+            seg3D(-0.52f, side * 0.85f, 0.48f, -0.70f, side * 0.6f, 0.28f, r, g, b, 0.95f)
+            // Lower chassis chine
+            seg3D(0.72f, side * 0.6f, 0.24f, -0.70f, side * 0.6f, 0.28f, r, g, b, 0.7f)
+        }
+        // Center White-Hot Canopy Spine
+        seg3D(0.74f, 0f, 0.26f, 0.28f, 0f, 0.62f, 1f, 1f, 1f, 1f)
+        seg3D(0.28f, 0f, 0.62f, -0.15f, 0f, 0.74f, 1f, 1f, 1f, 1f)
+        seg3D(-0.15f, 0f, 0.74f, -0.68f, 0f, 0.36f, 1f, 1f, 1f, 1f)
+
+        // Cross-ribs over the canopy visor
+        seg3D(0.35f, -0.18f, 0.56f, 0.35f, 0.18f, 0.56f, 1f, 1f, 1f, 0.85f)
+        seg3D(-0.10f, -0.19f, 0.68f, -0.10f, 0.19f, 0.68f, r, g, b, 0.85f)
+
+        // 3. Dorsal Identity Disc Ring on Rider's Back (Gold when player has Disc Ammo)
+        if (!c.isPlayer || game.discAmmo > 0) {
+            val dr = if (c.isPlayer) 1f else r
+            val dg = if (c.isPlayer) 0.9f else g
+            val db = if (c.isPlayer) 0.1f else b
+            seg3D(-0.05f, -0.14f, 0.76f, -0.32f, -0.14f, 0.68f, dr, dg, db, 1f)
+            seg3D(-0.05f, 0.14f, 0.76f, -0.32f, 0.14f, 0.68f, dr, dg, db, 1f)
+            seg3D(-0.05f, -0.14f, 0.76f, -0.05f, 0.14f, 0.76f, dr, dg, db, 1f)
+            seg3D(-0.32f, -0.14f, 0.68f, -0.32f, 0.14f, 0.68f, dr, dg, db, 1f)
+        }
+
+        // 4. Twin Rear Plasma Thruster Cones
+        val jetLen = if (c.isPlayer && game.turboTimer > 0f) 0.65f else 0.34f
+        for (side in floatArrayOf(-0.09f, 0.09f)) {
+            seg3D(-0.68f, side, 0.34f, -0.68f - jetLen, side * 0.4f, 0.30f, 0.6f, 1f, 1f, 0.9f)
+        }
+
+        // 5. Phase Shift 4D Hologram Cage (when Phase Shift is active)
+        if (c.isPlayer && game.phaseTimer > 0f) {
+            val pAlpha = 0.5f + 0.4f * sin(game.time * 18f)
+            seg3D(0.82f, -0.32f, 0.05f, 0.82f, 0.32f, 0.05f, 0f, 1f, 1f, pAlpha)
+            seg3D(-0.82f, -0.32f, 0.05f, -0.82f, 0.32f, 0.05f, 0f, 1f, 1f, pAlpha)
+            seg3D(0.82f, -0.32f, 0.85f, -0.82f, -0.32f, 0.85f, 0f, 1f, 1f, pAlpha)
+            seg3D(0.82f, 0.32f, 0.85f, -0.82f, 0.32f, 0.85f, 0f, 1f, 1f, pAlpha)
+        }
+    }
+
+    /** 6 Distinct Rotating 3D Holographic Power-Up Models for Remix 2000 Mode. */
+    private fun buildRemixPowerUp(rp: RemixPowerUp) {
+        val x = rp.x + 0.5f
+        val z = rp.z + 0.5f
+        val pulse = 0.65f + 0.35f * sin(game.time * 6f)
+        hsv(rp.type.hue, 0.85f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+
+        // Vertical beacon column & floor base ring
+        lines.line(x, 0f, z, x, 2.2f, z, r, g, b, 0.28f * pulse)
+        ringY(x, z, 0.52f, 0.03f, 12, game.time * 2f, r, g, b, 0.7f)
+
+        val y = 0.68f + 0.14f * sin(game.time * 4.5f)
+        val s = 0.44f
+        val a = game.time * 3.0f
+        val ca = cos(a) * s; val sa = sin(a) * s
+
+        // Rotating 3D Octahedron / Hypercube Hologram
+        lines.line(x - ca, y, z - sa, x, y + s, z, r, g, b, 0.95f)
+        lines.line(x + ca, y, z + sa, x, y + s, z, r, g, b, 0.95f)
+        lines.line(x - sa, y, z + ca, x, y + s, z, r, g, b, 0.95f)
+        lines.line(x + sa, y, z - ca, x, y + s, z, r, g, b, 0.95f)
+        lines.line(x - ca, y, z - sa, x, y - s, z, r, g, b, 0.95f)
+        lines.line(x + ca, y, z + sa, x, y - s, z, r, g, b, 0.95f)
+        lines.line(x - sa, y, z + ca, x, y - s, z, r, g, b, 0.95f)
+        lines.line(x + sa, y, z - ca, x, y - s, z, r, g, b, 0.95f)
+        ringY(x, z, s, y, 8, a, 1f, 1f, 1f, 0.85f)
+        fx.v(x, y, z, 1f, 1f, 1f, 1f)
+    }
+
+    private fun buildIdentityDiscs() {
+        for (d in game.identityDiscs) {
+            ringY(d.x, d.z, 0.55f, 0.45f, 14, game.time * 16f, 1f, 0.65f, 0.1f, 1f)
+            ringY(d.x, d.z, 0.32f, 0.45f, 10, -game.time * 16f, 1f, 1f, 1f, 0.95f)
+            fx.v(d.x, 0.45f, d.z, 1f, 0.9f, 0.3f, 1f)
+        }
+    }
+
+    private fun buildSuperzapBolts() {
+        for (b in game.superzapBolts) {
+            val k = (b.life / 0.45f).coerceIn(0f, 1f)
+            // Orbital strike from sky to target + arc from player
+            lines.line(b.x1, 14f, b.z1, b.x1, 0.2f, b.z1, 1f, 0.95f, 0.2f, k)
+            lines.line(b.x0, 0.6f, b.z0, b.x1, 0.6f, b.z1, 1f, 0.95f, 0.2f, k)
+            ringY(b.x1, b.z1, (1f - k) * 3.5f + 0.5f, 0.1f, 16, 0f, 1f, 0.9f, 0.2f, k)
+        }
+    }
+
+    private fun buildPopups3D() {
+        for (pop in game.popups) {
+            val k = (pop.life / pop.maxLife).coerceIn(0f, 1f)
+            hsv((pop.hue + game.time * 1.8f) % 1f, 0.9f, 1f)
+            val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+            val sc = 0.12f
+            val w = StrokeFont.width(pop.text, sc)
+            val startX = pop.x - w * 0.5f
+            val sink3D = object : StrokeFont.LineSink {
+                override fun line(x0: Float, y0: Float, x1: Float, y1: Float) {
+                    lines.line(x0, pop.y - y0, pop.z, x1, pop.y - y1, pop.z, r, g, b, k)
+                }
+            }
+            StrokeFont.draw(pop.text, startX, 0f, sc, sink3D)
+        }
+    }
+
+    /** Towering TRON Recognizer Gate patrolling the North Horizon. */
+    private fun buildHorizonArch() {
+        val cx = G / 2f + sin(game.time * 0.45f) * 6f
+        val cz = -4.5f
+        val hover = sin(game.time * 2.5f) * 0.35f
+        hsv((game.time * 0.15f) % 1f, 0.85f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+
+        // Twin descending Recognizer legs
+        for (lx in floatArrayOf(-3.2f, 3.2f)) {
+            lines.line(cx + lx - 0.6f, 0.2f + hover, cz, cx + lx - 0.6f, 6.2f + hover, cz, 1f, 0.2f, 0.6f, 0.85f)
+            lines.line(cx + lx + 0.6f, 0.2f + hover, cz, cx + lx + 0.6f, 6.2f + hover, cz, 1f, 0.2f, 0.6f, 0.85f)
+            lines.line(cx + lx - 0.6f, 0.2f + hover, cz, cx + lx + 0.6f, 0.2f + hover, cz, 1f, 0.2f, 0.6f, 0.85f)
+        }
+        // Upper Crossbar Bridge
+        for (yy in floatArrayOf(5.2f + hover, 6.8f + hover)) {
+            lines.line(cx - 4.8f, yy, cz - 1.2f, cx + 4.8f, yy, cz - 1.2f, r, g, b, 0.9f)
+            lines.line(cx - 4.8f, yy, cz + 1.2f, cx + 4.8f, yy, cz + 1.2f, r, g, b, 0.9f)
+        }
+        // Floating Command Crown & Central Scanning Core
+        lines.line(cx - 2.4f, 7.6f + hover, cz, cx + 2.4f, 7.6f + hover, cz, 1f, 0.9f, 0.2f, 0.95f)
+        fx.v(cx, 6.0f + hover, cz + 1.2f, 0f, 1f, 1f, 1f)
+    }
+
+    /** Tempest 2000 Between-Wave 3D Octagonal Web Warp Tunnel. */
+    private fun buildWarpTunnel3D() {
+        val cx = G / 2f
+        val cy = 12f
+        val baseZ = G / 2f
+        val ringCount = 18
+        val spacing = 3.2f
+        val scroll = (game.time * 28f) % spacing
+
+        for (i in 0 until ringCount) {
+            val rz = baseZ + 4f - i * spacing + scroll
+            val rad = 3.8f + sin(game.time * 3f + i * 0.4f) * 0.35f
+            hsv((game.time * 0.6f + i * 0.06f) % 1f, 0.95f, 1f)
+            val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+            val sides = 8
+            val twist = sin(game.time * 2f + i * 0.2f) * 0.25f
+            for (s in 0 until sides) {
+                val a0 = s * 6.2832f / sides + twist
+                val a1 = (s + 1) * 6.2832f / sides + twist
+                lines.line(
+                    cx + cos(a0) * rad, cy + sin(a0) * rad, rz,
+                    cx + cos(a1) * rad, cy + sin(a1) * rad, rz,
+                    r, g, b, 0.9f
+                )
+            }
+        }
+        // Longitudinal Web Spokes
+        for (s in 0 until 8) {
+            val a = s * 6.2832f / 8f
+            lines.line(
+                cx + cos(a) * 3.8f, cy + sin(a) * 3.8f, baseZ + 5f,
+                cx + cos(a) * 3.8f, cy + sin(a) * 3.8f, baseZ - ringCount * spacing,
+                1f, 0.1f, 0.7f, 0.55f
+            )
+        }
     }
 
     /** The level's jump pickup: a bobbing spring-green beacon with an up-chevron. */
@@ -385,17 +665,46 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         StrokeFont.draw(s, x, y, scale, sink)
     }
 
+    private fun hudBox(x0: Float, y0: Float, x1: Float, y1: Float, r: Float, g: Float, b: Float, a: Float) {
+        hud.line(x0, y0, 0f, x1, y0, 0f, r, g, b, a)
+        hud.line(x0, y1, 0f, x1, y1, 0f, r, g, b, a)
+        hud.line(x0, y0, 0f, x0, y1, 0f, r, g, b, a)
+        hud.line(x1, y0, 0f, x1, y1, 0f, r, g, b, a)
+    }
+
     private fun buildHud() {
         hud.reset()
         val pulse = 0.55f + 0.45f * sin(game.time * 4f)
-        hsv(game.time * 0.05f, 0.8f, 1f)
+        hsv(game.time * (if (game.remixMode) 0.18f else 0.05f), 0.85f, 1f)
         val hr = rgb[0]; val hg = rgb[1]; val hb = rgb[2]
         when (game.state) {
             GameState.TITLE -> {
-                text("X3 CYCLES", 320f, 120f, 4.6f, hr, hg, hb)
-                text("THE MONOPOLY CONTROL PROTOCOL HOLDS THE GRID", 320f, 168f, 1.3f, 1f, 0.45f, 0.4f, 0.85f)
-                text("TURN LEFT OR RIGHT TO RIDE", 320f, 396f, 1.7f, 1f, 1f, 1f, pulse)
-                if (game.bestLevel > 1) text("BEST LEVEL ${game.bestLevel}", 320f, 436f, 1.5f, 0.6f, 1f, 0.7f)
+                if (game.remixMode) {
+                    text("LIGHTCYCLE 2000", 320f, 102f, 4.1f, hr, hg, hb)
+                    text("TRON 3D CHASE CAM + TEMPEST 2000 VOICE + 6 POWERUPS", 320f, 148f, 1.15f, 1f, 0.9f, 0.25f, 0.92f)
+                } else {
+                    text("X3 CYCLES", 320f, 102f, 4.6f, hr, hg, hb)
+                    text("THE MONOPOLY CONTROL PROTOCOL HOLDS THE GRID", 320f, 148f, 1.25f, 1f, 0.45f, 0.4f, 0.85f)
+                }
+
+                // Selectable Main Menu Mode Cards: [ CLASSIC MCP ] vs [ REMIX 2000 ]
+                val cSel = !game.remixMode
+                val rSel = game.remixMode
+
+                hudBox(56f, 232f, 304f, 276f, 0.3f, 0.9f, 1f, if (cSel) 0.95f else 0.28f)
+                if (cSel) hudBox(52f, 228f, 308f, 280f, 1f, 1f, 1f, pulse)
+                text(if (cSel) "> CLASSIC MCP <" else "CLASSIC MCP", 180f, 260f, 1.55f, 0.4f, 0.95f, 1f, if (cSel) 1f else 0.45f)
+
+                hudBox(336f, 232f, 584f, 276f, 1f, 0.25f, 0.8f, if (rSel) 0.95f else 0.28f)
+                if (rSel) hudBox(332f, 228f, 588f, 280f, 1f, 0.9f, 0.2f, pulse)
+                text(if (rSel) "> REMIX 2000 <" else "REMIX 2000", 460f, 260f, 1.55f, 1f, 0.88f, 0.25f, if (rSel) 1f else 0.45f)
+
+                text("SWIPE TO SELECT MODE  -  TAP TO LAUNCH", 320f, 402f, 1.5f, 1f, 1f, 1f, pulse)
+                val bestLv = if (game.remixMode) game.remixBestLevel else game.bestLevel
+                val bestHi = if (game.remixMode) game.remixHighScore else game.highScore
+                if (bestLv > 1 || bestHi > 0) {
+                    text("BEST LV $bestLv   HI $bestHi", 320f, 442f, 1.4f, 0.6f, 1f, 0.7f)
+                }
             }
             GameState.COUNTDOWN -> {
                 bar()
@@ -404,8 +713,18 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
             GameState.RACING -> {
                 bar()
-                if (game.jumpArmed) text("JUMP READY", 320f, 66f, 1.6f, 0.5f, 1f, 0.7f, pulse)
-                else if (game.powerActive) text("GRAB THE JUMP", 320f, 66f, 1.5f, 0.5f, 1f, 0.7f, pulse * 0.8f)
+                if (game.remixMode) {
+                    when {
+                        game.phaseTimer > 0f -> text("PHASE SHIFT ${game.phaseTimer.toInt() + 1}S", 320f, 68f, 1.65f, 0.2f, 1f, 1f, pulse)
+                        game.turboTimer > 0f -> text("MEGA TURBO ${game.turboTimer.toInt() + 1}S", 320f, 68f, 1.65f, 0.3f, 1f, 0.5f, pulse)
+                        game.chronoTimer > 0f -> text("TIME DILATION ${game.chronoTimer.toInt() + 1}S", 320f, 68f, 1.65f, 0.4f, 0.7f, 1f, pulse)
+                        game.discAmmo > 0 -> text("TAP TO FIRE DISC (${game.discAmmo})", 320f, 68f, 1.5f, 1f, 0.75f, 0.2f, pulse)
+                        game.jumpArmed -> text("TAP OR AUTO JUMP READY", 320f, 68f, 1.5f, 0.5f, 1f, 0.7f, pulse)
+                    }
+                } else {
+                    if (game.jumpArmed) text("JUMP READY", 320f, 66f, 1.6f, 0.5f, 1f, 0.7f, pulse)
+                    else if (game.powerActive) text("GRAB THE JUMP", 320f, 66f, 1.5f, 0.5f, 1f, 0.7f, pulse * 0.8f)
+                }
                 if (game.recognizerCount > 0) text("RECOGNIZERS INBOUND", 320f, 452f, 1.5f, 1f, 0.4f, 0.2f, pulse)
             }
             GameState.LIFE_LOST -> {
@@ -417,31 +736,39 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
             GameState.LEVEL_CLEAR -> {
                 bar()
-                text("LEVEL CLEAR", 320f, 230f, 3.4f, 0.5f, 1f, 0.6f, pulse)
+                if (game.remixMode) {
+                    text("WARP BONUS! WAVE ${game.level} CLEAR!", 320f, 210f, 2.5f, hr, hg, hb, 1f)
+                    text("ENTERING HYPERSPACE WEB TUNNEL", 320f, 256f, 1.5f, 1f, 0.9f, 0.3f, pulse)
+                } else {
+                    text("LEVEL CLEAR", 320f, 230f, 3.4f, 0.5f, 1f, 0.6f, pulse)
+                }
             }
             GameState.GAME_OVER -> {
-                text("DEREZZED", 320f, 180f, 3.6f, 1f, 0.35f, 0.3f)
-                text("REACHED LEVEL ${game.level}", 320f, 240f, 2f, 0.8f, 0.9f, 1f)
-                text("BEST ${game.bestLevel}", 320f, 285f, 1.8f, 0.6f, 1f, 0.7f)
-                text("TURN TO RETRY", 320f, 360f, 2f, 1f, 1f, 1f, pulse)
+                text("DEREZZED", 320f, 170f, 3.6f, 1f, 0.35f, 0.3f)
+                text("REACHED LEVEL ${game.level}   SCORE ${game.score}", 320f, 230f, 1.85f, 0.8f, 0.9f, 1f)
+                val bestLv = if (game.remixMode) game.remixBestLevel else game.bestLevel
+                text("BEST LEVEL $bestLv", 320f, 275f, 1.8f, 0.6f, 1f, 0.7f)
+                text("TAP TO RETRY  -  SWIPE FOR MENU", 320f, 355f, 1.65f, 1f, 1f, 1f, pulse)
             }
         }
-        // ---- the MCP's caption: whatever it just said, vector-set and
-        //      auto-shrunk to fit, in its alarm-red register ----
+        // ---- the MCP / Grid 2000 caption: whatever it just said, vector-set and
+        //      auto-shrunk to fit ----
         if (game.captionT > 0f) {
             val s = game.caption
             if (s.isNotEmpty()) {
                 val fade = (game.captionT / 0.6f).coerceAtMost(1f)
                 val scale = minOf(1.6f, 600f / StrokeFont.width(s, 1f))
-                val y = if (game.state == GameState.TITLE) 210f else 424f
-                text("MCP", 320f, y - 16f * scale, scale * 0.75f, 1f, 0.3f, 0.25f, 0.8f * fade)
-                text(s, 320f, y, scale, 1f, 0.55f, 0.5f, fade)
+                val y = if (game.state == GameState.TITLE) 204f else 424f
+                val speaker = if (game.remixMode) "GRID 2000" else "MCP"
+                text(speaker, 320f, y - 16f * scale, scale * 0.75f, if (game.remixMode) 1f else 1f, if (game.remixMode) 0.9f else 0.3f, if (game.remixMode) 0.2f else 0.25f, 0.85f * fade)
+                text(s, 320f, y, scale, 1f, if (game.remixMode) 0.85f else 0.55f, if (game.remixMode) 0.3f else 0.5f, fade)
             }
         }
     }
 
     private fun bar() {
-        text("LV ${game.level}", 18f, 42f, 2f, 0.7f, 0.85f, 1f, 1f, center = false)
+        val prefix = if (game.remixMode) "2K W${game.level}" else "LV ${game.level}"
+        text(prefix, 18f, 42f, 2f, 0.7f, 0.85f, 1f, 1f, center = false)
         val opp = "RIVALS ${game.opponentsAlive}"
         text(opp, 320f - StrokeFont.width(opp, 1.8f) / 2f, 42f, 1.8f, 1f, 0.8f, 0.4f, 1f, center = false)
         val sc = "${game.score}"

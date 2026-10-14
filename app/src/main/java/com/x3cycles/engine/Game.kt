@@ -32,6 +32,7 @@ class Cycle(var cx: Int, var cz: Int, var dir: Int, val hue: Float, val isPlayer
     var progress = 0f
     var alive = true
     var derezT = 0f              // >0 while this cycle's beam dissolves away
+    var visualRoll = 0f          // 3D banking roll angle on turns in Remix 2000 Mode
     // Queued relative turns (true = left, false = right), one applied per cell.
     // A FIFO buffer so a rapid double-flick becomes a staircase instead of
     // collapsing into a single net direction.
@@ -40,6 +41,20 @@ class Cycle(var cx: Int, var cz: Int, var dir: Int, val hue: Float, val isPlayer
     fun headX() = cx + DX[dir] * progress
     fun headZ() = cz + DZ[dir] * progress
 }
+
+enum class RemixPowerType(val label: String, val hue: Float, val voiceEvent: String) {
+    SUPERZAPPER("SUPERZAPPER", 0.14f, "remix_superzapper"),
+    PHASE_SHIFT("PHASE SHIFT", 0.50f, "remix_phase_shift"),
+    MEGA_TURBO("MEGA TURBO", 0.35f, "remix_mega_turbo"),
+    GRID_PURGE("GRID PURGE", 0.85f, "remix_grid_purge"),
+    DISC_OVERDRIVE("DISC OVERDRIVE", 0.07f, "remix_disc_overdrive"),
+    TIME_DILATION("TIME DILATION", 0.60f, "remix_time_dilation")
+}
+
+class RemixPowerUp(var x: Int, var z: Int, val type: RemixPowerType)
+class IdentityDisc(var x: Float, var z: Float, val vx: Float, val vz: Float, var life: Float = 2.6f)
+class FloatingPopup(val text: String, var x: Float, var y: Float, var z: Float, val hue: Float, var life: Float = 1.45f, val maxLife: Float = 1.45f)
+class SuperzapBolt(val x0: Float, val z0: Float, val x1: Float, val z1: Float, var life: Float = 0.45f)
 
 class Recognizer(var x: Float, var z: Float) { var fireTimer = 2f }
 class Bolt(var x: Float, var z: Float, var vx: Float, var vz: Float) { var life = 4f }
@@ -79,10 +94,16 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     var state = GameState.TITLE; private set
+    var remixMode = store.remixMode; private set
+
     val cycles = ArrayList<Cycle>()
     val recognizers = ArrayList<Recognizer>()
     val bolts = ArrayList<Bolt>()
     val particles = ArrayList<Particle>()
+    val remixPowerUps = ArrayList<RemixPowerUp>()
+    val identityDiscs = ArrayList<IdentityDisc>()
+    val popups = ArrayList<FloatingPopup>()
+    val superzapBolts = ArrayList<SuperzapBolt>()
     private val pool = ArrayDeque<Particle>()
     private val grid = IntArray(GRID * GRID)
 
@@ -90,6 +111,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var score = 0; private set
     var highScore = 0; private set
     var bestLevel = 1; private set
+    var remixHighScore = 0; private set
+    var remixBestLevel = 1; private set
     var lives = START_LIVES; private set
     private var nextLifeScore = EXTRA_LIFE_STEP
     var speed = BASE_SPEED; private set
@@ -114,18 +137,69 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var jumpArmed = false; private set      // collected, waiting to auto-fire
     var jumpAnim = 0f; private set          // >0 briefly after a hop (for FX)
 
-    // ---- the MCP's voice: caption of whatever it just said ----
+    // Remix 2000 active power-up timers & ammo
+    var phaseTimer = 0f; private set
+    var turboTimer = 0f; private set
+    var chronoTimer = 0f; private set
+    var discAmmo = 0; private set
+    private var remixSpawnTimer = 3.5f
+
+    // ---- the MCP / Grid 2000 announcer voice: caption of whatever it just said ----
     var caption = ""; private set
     var captionT = 0f; private set
     private var saidTitleLine = false
 
-    // priority 1 = story beat (start / clear / life lost / game over / title),
-    // priority 0 = incidental (kill taunt, extra life). A beat can override a
-    // taunt in progress; nothing overrides a beat; nothing overrides its equal.
+    // priority 2 = immediate mode/powerup callout, 1 = story beat, 0 = incidental
     private fun mcpSays(vararg events: String, priority: Int = 1) {
         val quote = host.voice(priority, *events) ?: return
         caption = quote.uppercase()
         captionT = 4.6f
+    }
+
+    fun toggleMode() {
+        remixMode = !remixMode
+        store.remixMode = remixMode
+        host.sfx(Sfx.POWER, if (remixMode) 1.25f else 0.95f, 0.85f)
+        if (remixMode) {
+            mcpSays("remix_mode_select", priority = 2)
+        } else {
+            mcpSays("classic_mode_select", priority = 2)
+        }
+    }
+
+    fun triggerRemixAction() {
+        if (!remixMode || state != GameState.RACING) return
+        val p = player ?: return
+        if (!p.alive) return
+        if (discAmmo > 0) {
+            fireIdentityDisc(p)
+        } else if (jumpArmed) {
+            // Manual anti-grav hop forward 2 cells over any hazard
+            val tx = p.cx + DX[p.dir]; val tz = p.cz + DZ[p.dir]
+            val lx = tx + DX[p.dir]; val lz = tz + DZ[p.dir]
+            if (lx in 1 until GRID - 1 && lz in 1 until GRID - 1 && !blocked(lx, lz)) {
+                jumpArmed = false; jumpAnim = 1f
+                p.cx = lx; p.cz = lz
+                p.trail.add(intArrayOf(lx, lz))
+                grid[lz * GRID + lx] = P_TRAIL
+                jumpPuff(tx + 0.5f, tz + 0.5f, p.hue)
+                spawnPopup("HYPER JUMP!", lx + 0.5f, 1.2f, lz + 0.5f, 0.48f)
+                host.sfx(Sfx.JUMP, 1.15f, 1.0f)
+            }
+        }
+    }
+
+    private fun fireIdentityDisc(p: Cycle) {
+        if (discAmmo <= 0) return
+        discAmmo--
+        val hx = p.headX() + 0.5f + DX[p.dir] * 0.6f
+        val hz = p.headZ() + 0.5f + DZ[p.dir] * 0.6f
+        identityDiscs.add(IdentityDisc(hx, hz, DX[p.dir] * 18f, DZ[p.dir] * 18f))
+        host.sfx(Sfx.ZAP, 1.25f, 0.95f)
+    }
+
+    private fun spawnPopup(text: String, x: Float, y: Float, z: Float, hue: Float) {
+        popups.add(FloatingPopup(text, x, y, z, hue))
     }
 
     // ---- the title attract: a demo cycle draws "X3 PRO" in light on the grid ----
@@ -203,6 +277,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     fun boot() {
         highScore = store.highScore
         bestLevel = store.bestLevel
+        remixHighScore = store.remixHighScore
+        remixBestLevel = store.remixBestLevel
+        remixMode = store.remixMode
         toTitle()
     }
 
@@ -233,7 +310,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         shake = maxOf(0f, shake - dt * 3f)
         jumpAnim = maxOf(0f, jumpAnim - dt * 2.5f)
         captionT = maxOf(0f, captionT - dt)
+        for (c in cycles) {
+            c.visualRoll += (0f - c.visualRoll) * minOf(1f, dt * 9f)
+        }
         updateParticles(dt)
+        updatePopups(dt)
         updateDerez(dt)
         when (state) {
             GameState.TITLE -> updateTitleRider(dt)
@@ -255,19 +336,36 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     private fun updateRacing(dt: Float) {
+        if (remixMode) {
+            phaseTimer = maxOf(0f, phaseTimer - dt)
+            turboTimer = maxOf(0f, turboTimer - dt)
+            chronoTimer = maxOf(0f, chronoTimer - dt)
+            remixSpawnTimer -= dt
+            if (remixSpawnTimer <= 0f) {
+                spawnRemixPowerUp()
+                remixSpawnTimer = 4.8f + rng.nextFloat() * 2.5f
+            }
+            updateIdentityDiscs(dt)
+        }
+
         for (c in cycles) if (c.alive) stepCycle(c, dt)
-        updateRecognizers(dt)
-        updateBolts(dt)
+        val recogDt = if (remixMode && chronoTimer > 0f) dt * 0.42f else dt
+        updateRecognizers(recogDt)
+        updateBolts(recogDt)
 
         val p = player
         if (p != null && !p.alive) { loseLife(); return }
         if (opponentsAlive == 0) {
-            addScore(500 * level)
+            addScore(if (remixMode) 1000 * level else 500 * level)
             state = GameState.LEVEL_CLEAR
-            clearTimer = 3.4f   // room for the clear line to finish before the next start line
+            clearTimer = 3.4f   // room for the clear line / Tempest 2000 Warp Tunnel
             host.stopDrone()
             host.sfx(Sfx.LEVELUP)
-            mcpSays("l%02d_clear".format(level), "level_clear")
+            if (remixMode) {
+                mcpSays("remix_warp_bonus", priority = 2)
+            } else {
+                mcpSays("l%02d_clear".format(level), "level_clear")
+            }
         }
     }
 
@@ -296,19 +394,35 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 mcpSays("extra_life", priority = 0)
             }
         }
-        if (score > highScore) { highScore = score; store.highScore = score }
+        if (remixMode) {
+            if (score > remixHighScore) { remixHighScore = score; store.remixHighScore = score }
+        } else {
+            if (score > highScore) { highScore = score; store.highScore = score }
+        }
     }
 
     private fun stepCycle(c: Cycle, dt: Float) {
-        c.progress += speed * dt
+        val speedMult = when {
+            c.isPlayer && remixMode && turboTimer > 0f -> 1.35f
+            !c.isPlayer && remixMode && chronoTimer > 0f -> 0.42f
+            else -> 1f
+        }
+        c.progress += speed * speedMult * dt
         var guard = 0
         while (c.progress >= 1f && c.alive && guard++ < 4) {
             c.progress -= 1f
             if (!c.isPlayer) aiSteer(c) else applyPlayerTurn(c)
             val tx = c.cx + DX[c.dir]; val tz = c.cz + DZ[c.dir]
+            val outOfBounds = tx < 0 || tx >= GRID || tz < 0 || tz >= GRID
             if (blocked(tx, tz)) {
+                // In Remix 2000 Mode, Phase Shift lets the player ghost through any interior light wall!
+                if (c.isPlayer && remixMode && phaseTimer > 0f && !outOfBounds) {
+                    c.cx = tx; c.cz = tz
+                    spawnBeamSpark(tx + 0.5f, tz + 0.5f, 0.50f)
+                    continue
+                }
                 // Charged player auto-hops a single light beam — enemy OR their
-                // own — but never the arena wall/border. Once-per-level jump.
+                // own — but never the arena wall/border.
                 if (c.isPlayer && jumpArmed && cellVal(tx, tz) > 0) {
                     val lx = tx + DX[c.dir]; val lz = tz + DZ[c.dir]
                     if (!blocked(lx, lz)) {
@@ -316,6 +430,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                         c.cx = lx; c.cz = lz
                         grid[lz * GRID + lx] = P_TRAIL // (tx,tz) stays a gap: airborne
                         jumpPuff(tx + 0.5f, tz + 0.5f, c.hue)
+                        if (remixMode) spawnPopup("AUTO JUMP!", lx + 0.5f, 1.2f, lz + 0.5f, 0.45f)
                         host.sfx(Sfx.JUMP)
                         continue
                     }
@@ -324,10 +439,150 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             }
             c.cx = tx; c.cz = tz
             grid[tz * GRID + tx] = if (c.isPlayer) P_TRAIL else R_TRAIL
+
+            // Classic Jump Pickup
             if (c.isPlayer && powerActive && tx == powerX && tz == powerZ) {
                 powerActive = false; jumpArmed = true
                 host.sfx(Sfx.POWER, 1.1f, 0.9f)
             }
+
+            // Remix 2000: Wall-Grind Bonus & 6 Holographic Power-Up Pickups
+            if (remixMode && c.isPlayer) {
+                val ld = leftOf(c.dir); val rd = rightOf(c.dir)
+                val grindL = cellVal(tx + DX[ld], tz + DZ[ld]) > 0
+                val grindR = cellVal(tx + DX[rd], tz + DZ[rd]) > 0
+                if (grindL || grindR) {
+                    addScore(25 * level)
+                    spawnBeamSpark(tx + 0.5f, tz + 0.5f, 0.14f)
+                    host.sfx(Sfx.BLIP, 1.4f, 0.35f)
+                }
+
+                for (pi in remixPowerUps.size - 1 downTo 0) {
+                    val rp = remixPowerUps[pi]
+                    if (abs(tx - rp.x) <= 1 && abs(tz - rp.z) <= 1) {
+                        remixPowerUps.removeAt(pi)
+                        collectRemixPowerUp(c, rp)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun collectRemixPowerUp(p: Cycle, rp: RemixPowerUp) {
+        addScore(250 * level)
+        host.sfx(Sfx.POWER, 1.2f, 1.0f)
+        mcpSays(rp.type.voiceEvent, priority = 2)
+        spawnPopup(rp.type.label, rp.x + 0.5f, 1.3f, rp.z + 0.5f, rp.type.hue)
+
+        when (rp.type) {
+            RemixPowerType.SUPERZAPPER -> {
+                val target = cycles.filter { !it.isPlayer && it.alive }
+                    .minByOrNull { hypot((it.cx - p.cx).toFloat(), (it.cz - p.cz).toFloat()) }
+                if (target != null) {
+                    superzapBolts.add(SuperzapBolt(p.headX() + 0.5f, p.headZ() + 0.5f, target.headX() + 0.5f, target.headZ() + 0.5f))
+                    host.sfx(Sfx.SUPERZAP, 1.0f, 1.0f)
+                    derez(target)
+                }
+            }
+            RemixPowerType.PHASE_SHIFT -> {
+                phaseTimer = 6.5f
+            }
+            RemixPowerType.MEGA_TURBO -> {
+                turboTimer = 7.0f
+                jumpArmed = true
+            }
+            RemixPowerType.GRID_PURGE -> {
+                for (rc in cycles) {
+                    if (!rc.isPlayer && rc.alive) {
+                        clearTrailCells(rc)
+                        sprayBeam(rc)
+                        rc.trail.clear()
+                        rc.trail.add(intArrayOf(rc.cx, rc.cz))
+                        occupy(rc)
+                    }
+                }
+                host.sfx(Sfx.BEAMOUT, 1.1f, 0.9f)
+            }
+            RemixPowerType.DISC_OVERDRIVE -> {
+                discAmmo = (discAmmo + 3).coerceAtMost(5)
+                fireIdentityDisc(p)
+            }
+            RemixPowerType.TIME_DILATION -> {
+                chronoTimer = 6.5f
+            }
+        }
+    }
+
+    private fun updateIdentityDiscs(dt: Float) {
+        var i = identityDiscs.size - 1
+        while (i >= 0) {
+            val d = identityDiscs[i]
+            d.x += d.vx * dt
+            d.z += d.vz * dt
+            d.life -= dt
+            val gx = d.x.toInt()
+            val gz = d.z.toInt()
+            if (d.life <= 0f || gx < 1 || gx >= GRID - 1 || gz < 1 || gz >= GRID - 1) {
+                identityDiscs.removeAt(i); i--; continue
+            }
+            // Slice a 3x3 breach through any rival light wall cells!
+            var breached = false
+            for (ox in -1..1) {
+                for (oz in -1..1) {
+                    val cx = gx + ox; val cz = gz + oz
+                    if (cx in 1 until GRID - 1 && cz in 1 until GRID - 1 && grid[cz * GRID + cx] == R_TRAIL) {
+                        grid[cz * GRID + cx] = 0
+                        spawnBeamSpark(cx + 0.5f, cz + 0.5f, 0.08f)
+                        breached = true
+                    }
+                }
+            }
+            if (breached) {
+                addScore(75 * level)
+            }
+            // Check direct hit on rival cycles
+            for (rc in cycles) {
+                if (!rc.isPlayer && rc.alive && hypot(rc.headX() + 0.5f - d.x, rc.headZ() + 0.5f - d.z) < 1.35f) {
+                    spawnPopup("DISC DEREZZ!", rc.headX() + 0.5f, 1.4f, rc.headZ() + 0.5f, 0.08f)
+                    derez(rc)
+                    identityDiscs.removeAt(i)
+                    break
+                }
+            }
+            i--
+        }
+    }
+
+    private fun spawnRemixPowerUp() {
+        if (remixPowerUps.size >= 4) return
+        val pl = player
+        val types = RemixPowerType.values()
+        var tries = 0
+        while (tries++ < 200) {
+            val x = 4 + rng.nextInt(GRID - 8)
+            val z = 4 + rng.nextInt(GRID - 8)
+            if (grid[z * GRID + x] != 0) continue
+            if (pl != null && abs(x - pl.cx) + abs(z - pl.cz) < 5) continue
+            remixPowerUps.add(RemixPowerUp(x, z, types[rng.nextInt(types.size)]))
+            return
+        }
+    }
+
+    private fun updatePopups(dt: Float) {
+        var i = popups.size - 1
+        while (i >= 0) {
+            val pop = popups[i]
+            pop.life -= dt
+            pop.y += 1.4f * dt
+            if (pop.life <= 0f) popups.removeAt(i)
+            i--
+        }
+        var bi = superzapBolts.size - 1
+        while (bi >= 0) {
+            val b = superzapBolts[bi]
+            b.life -= dt
+            if (b.life <= 0f) superzapBolts.removeAt(bi)
+            bi--
         }
     }
 
@@ -343,6 +598,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         if (c.pendingTurns.isEmpty()) return
         val left = c.pendingTurns.removeFirst()
         c.dir = if (left) leftOf(c.dir) else rightOf(c.dir)
+        c.visualRoll = if (left) 0.68f else -0.68f
         c.trail.add(intArrayOf(c.cx, c.cz))
     }
 
@@ -368,7 +624,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             val want = if (p != null && rng.nextFloat() < 0.6f) towardPlayer(c, p) else if (rng.nextBoolean()) leftOf(d) else rightOf(d)
             if (runLen(c, want) > 2) nd = want
         }
-        if (nd != d && nd != opposite(d)) { c.dir = nd; c.trail.add(intArrayOf(c.cx, c.cz)) }
+        if (nd != d && nd != opposite(d)) {
+            c.visualRoll = if (nd == leftOf(d)) 0.58f else -0.58f
+            c.dir = nd
+            c.trail.add(intArrayOf(c.cx, c.cz))
+        }
     }
 
     private fun towardPlayer(c: Cycle, p: Cycle): Int {
@@ -392,11 +652,15 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         explode(c.headX(), c.headZ(), c.hue)
         host.sfx(Sfx.DEREZ, if (c.isPlayer) 0.8f else 1.1f)
         if (!c.isPlayer) {
-            addScore(100 * level); host.sfx(Sfx.KILL, 1f, 0.9f)
+            val pts = (if (remixMode) 500 else 100) * level
+            addScore(pts); host.sfx(Sfx.KILL, 1f, 0.9f)
             beamDerez(c) // only THIS rival's light wall powers down
-            // the MCP does not appreciate losing riders (incidental — never
-            // cuts off a level-clear or start beat)
-            if (rng.nextFloat() < 0.4f && opponentsAlive > 0) mcpSays("kill_taunt", priority = 0)
+            if (remixMode) {
+                spawnPopup("DEREZZ +$pts!", c.headX() + 0.5f, 1.2f, c.headZ() + 0.5f, 0.14f)
+                if (opponentsAlive > 0) mcpSays("remix_kill", priority = 2)
+            } else {
+                if (rng.nextFloat() < 0.4f && opponentsAlive > 0) mcpSays("kill_taunt", priority = 0)
+            }
         }
     }
 
@@ -524,6 +788,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         recognizerCount = (lv - 1) / 5
         java.util.Arrays.fill(grid, 0)
         cycles.clear(); recognizers.clear(); bolts.clear()
+        remixPowerUps.clear(); identityDiscs.clear(); popups.clear(); superzapBolts.clear()
+        phaseTimer = 0f; turboTimer = 0f; chronoTimer = 0f
 
         // Player starts near the viewer and rides FORWARD, away up the grid (-z).
         val pl = Cycle(GRID / 2, GRID - 5, 3, 0.5f, true) // cyan-ish
@@ -540,19 +806,37 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             recognizers.add(Recognizer(4f + (GRID - 8f) * (i.toFloat() / maxOf(1, recognizerCount)), GRID / 2f))
         }
         placePowerUp()
+        if (remixMode) {
+            discAmmo = 1
+            remixSpawnTimer = 3.5f
+            repeat(2) { spawnRemixPowerUp() }
+        } else {
+            discAmmo = 0
+        }
         jumpArmed = false
         jumpAnim = 0f
 
-        countdown = COUNT_SECS
+        countdown = if (remixMode) 3f else COUNT_SECS
         lastBeep = -1
         state = GameState.COUNTDOWN
         host.titleMusic(false)
         host.sfx(Sfx.START)
         // On a respawn you're mid-level — don't replay the intro taunt (and
         // don't let it step on the life-lost line still finishing).
-        if (!respawn) mcpSays("l%02d_start".format(lv), "level_start")
-        if (lv > bestLevel) { bestLevel = lv; store.bestLevel = lv }
-        if (score > highScore) { highScore = score; store.highScore = score }
+        if (!respawn) {
+            if (remixMode) {
+                mcpSays(if (lv == 1) "remix_enter_grid" else "remix_next_wave", priority = 2)
+            } else {
+                mcpSays("l%02d_start".format(lv), "level_start")
+            }
+        }
+        if (remixMode) {
+            if (lv > remixBestLevel) { remixBestLevel = lv; store.remixBestLevel = lv }
+            if (score > remixHighScore) { remixHighScore = score; store.remixHighScore = score }
+        } else {
+            if (lv > bestLevel) { bestLevel = lv; store.bestLevel = lv }
+            if (score > highScore) { highScore = score; store.highScore = score }
+        }
     }
 
     private fun occupy(c: Cycle) { grid[c.cz * GRID + c.cx] = if (c.isPlayer) P_TRAIL else R_TRAIL }
@@ -588,15 +872,26 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         state = GameState.GAME_OVER
         host.stopDrone()
         host.sfx(Sfx.GAMEOVER)
-        mcpSays("game_over")
-        if (score > highScore) { highScore = score; store.highScore = score }
+        if (remixMode) {
+            if (score >= remixHighScore && score > 0) {
+                mcpSays("remix_new_highscore", priority = 2)
+            } else {
+                mcpSays("remix_gameover", priority = 2)
+            }
+            if (score > remixHighScore) { remixHighScore = score; store.remixHighScore = score }
+        } else {
+            mcpSays("game_over")
+            if (score > highScore) { highScore = score; store.highScore = score }
+        }
     }
 
     fun toTitle() {
         state = GameState.TITLE
         cycles.clear(); recognizers.clear(); bolts.clear()
+        remixPowerUps.clear(); identityDiscs.clear(); popups.clear(); superzapBolts.clear()
         player = null
         powerActive = false; jumpArmed = false; jumpAnim = 0f
+        phaseTimer = 0f; turboTimer = 0f; chronoTimer = 0f; discAmmo = 0
         host.stopDrone()
         // the attract loop: IO Tower theme + a demo cycle drawing "X3 PRO"
         titleDrawT = 0f

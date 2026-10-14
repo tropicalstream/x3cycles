@@ -22,6 +22,10 @@ class SettingsStore(context: Context) {
 
     val sbs get() = isRayNeoX3 // side-by-side for the glasses, single view elsewhere
 
+    var remixMode: Boolean
+        get() = p.getBoolean("remixMode", true)
+        set(v) { p.edit().putBoolean("remixMode", v).apply() }
+
     var highScore: Int
         get() = p.getInt("hi", 0)
         set(v) { if (v > highScore) p.edit().putInt("hi", v).apply() }
@@ -29,6 +33,14 @@ class SettingsStore(context: Context) {
     var bestLevel: Int
         get() = p.getInt("bestLevel", 1)
         set(v) { if (v > bestLevel) p.edit().putInt("bestLevel", v).apply() }
+
+    var remixHighScore: Int
+        get() = p.getInt("remixHi", 0)
+        set(v) { if (v > remixHighScore) p.edit().putInt("remixHi", v).apply() }
+
+    var remixBestLevel: Int
+        get() = p.getInt("remixBestLevel", 1)
+        set(v) { if (v > remixBestLevel) p.edit().putInt("remixBestLevel", v).apply() }
 
     var games: Int
         get() = p.getInt("games", 0)

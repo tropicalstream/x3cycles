@@ -61,6 +61,11 @@ object StrokeFont {
         '!' to arrayOf(intArrayOf(2, 6, 2, 2), intArrayOf(2, 1, 2, 0)),
         '.' to arrayOf(intArrayOf(2, 0, 2, 1)),
         '-' to arrayOf(intArrayOf(1, 3, 3, 3)),
+        '+' to arrayOf(intArrayOf(2, 1, 2, 5), intArrayOf(0, 3, 4, 3)),
+        '>' to arrayOf(intArrayOf(1, 5, 3, 3, 1, 1)),
+        '<' to arrayOf(intArrayOf(3, 5, 1, 3, 3, 1)),
+        '(' to arrayOf(intArrayOf(3, 6, 1, 4, 1, 2, 3, 0)),
+        ')' to arrayOf(intArrayOf(1, 6, 3, 4, 3, 2, 1, 0)),
     )
 
     const val ADVANCE = 5f // grid units per character (incl. gap)

@@ -64,7 +64,7 @@ class MainActivity : Activity(), GameHost {
     // ------------------------------------------------------------ GameHost
 
     override fun sfx(id: Int, pitch: Float, vol: Float) = sfx.play(id, pitch, vol)
-    override fun startDrone() = sfx.startDrone()
+    override fun startDrone() = sfx.startDrone(game.remixMode)
     override fun stopDrone() = sfx.stopDrone()
     override fun voice(priority: Int, vararg events: String): String? = voice.play(priority, *events)
     override fun titleMusic(on: Boolean) = voice.titleMusic(on)
@@ -80,7 +80,26 @@ class MainActivity : Activity(), GameHost {
         // aren't merged into one.
         if (now - lastTurn < 25) return
         lastTurn = now
-        glView.queueEvent { game.turn(left) } // run on the GL thread
+        glView.queueEvent {
+            when (game.state) {
+                GameState.TITLE -> game.toggleMode()
+                GameState.GAME_OVER -> game.toTitle()
+                else -> game.turn(left)
+            }
+        }
+    }
+
+    private fun confirmOrSpecial() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastTurn < 25) return
+        lastTurn = now
+        glView.queueEvent {
+            when (game.state) {
+                GameState.TITLE, GameState.GAME_OVER -> game.startGame()
+                GameState.RACING -> game.triggerRemixAction()
+                else -> {}
+            }
+        }
     }
 
     private fun turnForward() = turn(false) // forward swipe -> turn right of heading
@@ -91,10 +110,13 @@ class MainActivity : Activity(), GameHost {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { turnForward(); return true }
                 KeyEvent.KEYCODE_DPAD_LEFT -> { turnBack(); return true }
-                // A lone click (no direction) still starts the game / retries
-                // from the title & game-over screens.
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (game.state == GameState.TITLE) { turnForward(); return true }
+                }
+                // A tap / center click launches the selected mode from the title screen,
+                // retries on game over, or fires Disc/Jump in Remix 2000 mode.
                 KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> { turnForward(); return true }
+                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> { confirmOrSpecial(); return true }
             }
         }
         return super.dispatchKeyEvent(event)
@@ -107,19 +129,22 @@ class MainActivity : Activity(), GameHost {
             MotionEvent.ACTION_DOWN -> { downX = ev.x }
             MotionEvent.ACTION_UP -> {
                 val dx = ev.x - downX
+                val dead = max(16f, 0.02f * resources.displayMetrics.widthPixels)
                 val playing = game.state == GameState.RACING || game.state == GameState.COUNTDOWN
                 if (playing) {
-                    // In-race the pad only ever means "turn", so classify by the
-                    // SIGN of horizontal travel past a small dead-zone. A low
-                    // threshold is what lets short, quick flicks register (the old
-                    // 0.09*width bar was so high a fast flick fell through to the
-                    // tap branch and was forced into a single fixed direction).
-                    // Sign is inverted vs the physical gesture on this hardware.
-                    val dead = max(16f, 0.02f * resources.displayMetrics.widthPixels)
-                    if (abs(dx) >= dead) { if (dx < 0) turnForward() else turnBack() }
+                    if (abs(dx) >= dead) {
+                        if (dx < 0) turnForward() else turnBack()
+                    } else {
+                        confirmOrSpecial()
+                    }
                 } else {
-                    // Title / game-over / respawn: any tap or swipe starts / retries.
-                    turnForward()
+                    // On Title: swipe toggles mode (CLASSIC <-> REMIX 2000), tap starts game!
+                    // On Game Over: tap retries, swipe returns to Title menu!
+                    if (abs(dx) >= dead) {
+                        turnForward()
+                    } else {
+                        confirmOrSpecial()
+                    }
                 }
             }
         }
